@@ -98,7 +98,6 @@
         real(rk)                                  :: z_wat_bbl, z_bbl_sed, kz_gr !, z1(k_max+1), z_s1(k_max+1), phi1(i_max,k_max+1)
         integer                                   :: dynamic_kz_bbl
         real(rk)                                  :: kz_bbl_max, hz_sed_min, dbl_thickness, kz_mol0
-        real(rk)                                  :: kz_bbl_max, hz_sed_min, dbl_thickness, kz_mol0
         real(rk)                                  :: a1_bioirr, a2_bioirr
         real(rk)                                  :: kz_bioturb_max, z_const_bioturb, z_decay_bioturb
         real(rk)                                  :: phi_0, phi_inf, z_decay_phi, w_binf, rho_def, wat_con_0, wat_con_inf
@@ -967,10 +966,6 @@
         integer      :: trawling_switch                  ! Switch to run a trawling experiment
         integer      :: k_trawling,k_erosion,i_trawling,start_trawling,k_suspension, closest_k_depth  ! Auxiliary integer variables for bottom trawling experiments
 
-
-        integer      :: trawling_switch                  ! Switch to run a trawling experiment
-        integer      :: k_trawling,k_erosion,i_trawling,start_trawling,k_suspension, closest_k_depth  ! Auxiliary integer variables for bottom trawling experiments
-
         integer      :: k_inj,i_inj,inj_switch,inj_num,start_inj,stop_inj    !#number of layer and column to inject into, start day, stop day number
         integer      :: start_inj2,stop_inj2,start_inj3,stop_inj3    !#start day, stop day number for several injections
         real(rk)     :: cnpar                            !"Implicitness" parameter for GOTM vertical diffusion (set in brom.yaml)
@@ -988,14 +983,6 @@
         real(rk)     :: injection_rate                   ! injection rate
         real(rk)     :: injection_rate_ini               ! injection rate initial constant or multiplier if injection rate is a function
         real(rk)     :: start_inj_part_day     ! share of day to start injection first day (0=midnight, 0.75= 18h00m etc.)
-        real(rk)     :: depth_trawling         ! Penetration depth of the trawling device in the sediments [m].
-        real(rk)     :: depth_erosion          ! Depth of the eroded layer during trawling [m].
-        real(rk)     :: thickness_suspension   ! Thickness of the water layer where resuspension occurs [m].
-        real(rk)     :: vol_trawling           ! Volume of a set of layers where substances are mixed after trawling
-        real(rk)     :: mass_trawling          ! mass of state variable (cc) in a set of layers during trawling.
-        real(rk)     :: sumdz                  ! Depth within the sediments to interpolate with layers beneath
-        real(rk)     :: interp_slope           ! auxiliar variable to interpolate bottom layers of sediments onto upper layers after a trawling event
-        
 
         real(rk)     :: depth_trawling         ! Penetration depth of the trawling device in the sediments [m].
         real(rk)     :: depth_erosion          ! Depth of the eroded layer during trawling [m].
@@ -1004,6 +991,7 @@
         real(rk)     :: mass_trawling          ! mass of state variable (cc) in a set of layers during trawling.
         real(rk)     :: sumdz                  ! Depth within the sediments to interpolate with layers beneath
         real(rk)     :: interp_slope           ! auxiliar variable to interpolate bottom layers of sediments onto upper layers after a trawling event
+
         
 
         character(len=attribute_length), allocatable, dimension(:)    :: inj_var_name
