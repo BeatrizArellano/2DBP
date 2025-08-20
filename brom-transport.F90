@@ -1160,12 +1160,28 @@
     
             !_______vertical diffusion________!
                 do i=i_min, i_max
+                    if (i_day.eq.180.and.id.eq.1) then
+                        open(10,FILE = 'Kzti_before.dat', status='unknown', action='write')
+                        write(10, '(A)') 'k,z,kzti,kz,kz_mol,kz_bio'  ! Header
+                        do k=1,k_max
+                            write(10, '(I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                        end do
+                    endif
+
                     call calculate_phys(i, k_max, par_max, model, cc, kzti, fick, &
                         dcc, bctype_top, bctype_bottom, bc_top, bc_bottom, &
                         surf_flux, bott_flux, bott_source, k_bbl_sed, dz, hz, kz, &
                         kz_mol, kz_bio, julianday, id_O2, K_O2s, dt, freq_turb, &
                         diff_method, cnpar, surf_flux_with_diff,bott_flux_with_diff, &
                         bioturb_across_SWI, pF1, pF2, phi_inv, is_solid, cc0)
+
+                    if (i_day.eq.180.and.id.eq.1) then
+                        open(10,FILE = 'Kzti_after.dat', status='unknown', action='write')
+                        write(10, '(A)') 'k,z,kzti,kz,kz_mol,kz_bio'  ! Header
+                        do k=1,k_max
+                            write(10, '(I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                        end do
+                    endif
                 enddo
     
             !_______bioirrigation_____________!
