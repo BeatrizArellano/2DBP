@@ -1162,9 +1162,9 @@
                 do i=i_min, i_max
                     if (i_day.eq.180.and.id.eq.1) then
                         open(10,FILE = 'Kzti_before.dat', status='unknown', action='write')
-                        write(10, '(A)') 'k,z,kzti,kz,kz_mol,kz_bio'  ! Header
+                        write(10, '(A)') 'k,julianday,z,kzti,kz,kz_mol,kz_bio'  ! Header
                         do k=1,k_max
-                            write(10, '(I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                            write(10, '(I4, ",", I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
                         end do
                     endif
 
@@ -1177,9 +1177,9 @@
 
                     if (i_day.eq.180.and.id.eq.1) then
                         open(10,FILE = 'Kzti_after.dat', status='unknown', action='write')
-                        write(10, '(A)') 'k,z,kzti,kz,kz_mol,kz_bio'  ! Header
+                        write(10, '(A)') 'k,julianday,z,kzti,kz,kz_mol,kz_bio'  ! Header
                         do k=1,k_max
-                            write(10, '(I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                            write(10, '(I4, ",", I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
                         end do
                     endif
                 enddo
