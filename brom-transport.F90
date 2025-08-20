@@ -1160,11 +1160,11 @@
     
             !_______vertical diffusion________!
                 do i=i_min, i_max
-                    if (i_day.eq.180.and.id.eq.1) then
+                    if (i_day.eq.185.and.id.eq.1) then
                         open(10,FILE = 'Kzti_before.dat', status='unknown', action='write')
                         write(10, '(A)') 'k,julianday,z,kzti,kz,kz_mol,kz_bio'  ! Header
                         do k=1,k_max
-                            write(10, '(I4, ",", I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                            write(10, '(I4, ",", I4, ",", F13.5, ",", F20.12, ",", F20.12, ",", F20.12, ",", F20.12)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
                         end do
                     endif
 
@@ -1175,11 +1175,11 @@
                         diff_method, cnpar, surf_flux_with_diff,bott_flux_with_diff, &
                         bioturb_across_SWI, pF1, pF2, phi_inv, is_solid, cc0)
 
-                    if (i_day.eq.180.and.id.eq.1) then
+                    if (i_day.eq.185.and.id.eq.1) then
                         open(10,FILE = 'Kzti_after.dat', status='unknown', action='write')
                         write(10, '(A)') 'k,julianday,z,kzti,kz,kz_mol,kz_bio'  ! Header
                         do k=1,k_max
-                            write(10, '(I4, ",", I4, ",", F13.5, ",", F13.7, ",", F13.7, ",", F13.7, ",", F13.7)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
+                            write(10, '(I4, ",", I4, ",", F13.5, ",", F20.12, ",", F20.12, ",", F20.12, ",", F20.12)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
                         end do
                     endif
                 enddo
