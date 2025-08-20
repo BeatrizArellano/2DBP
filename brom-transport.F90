@@ -960,7 +960,7 @@
         integer      :: bc_units_convert, sediments_units_convert !options for conversion of concentrations units in the sediment
         integer      :: julianday, model_year
     
-        integer      :: ist, istep ! AB
+        integer      :: ist, istep, istep_new ! AB
         integer      :: i_count_pr, i_count_s, i_sec_pr
 
         integer      :: trawling_switch                  ! Switch to run a trawling experiment
@@ -1130,10 +1130,11 @@
                 enddo
             enddo
     
-          if (mod(int(id*dt),input_step).eq.0) then
-            ist = int((id*int(dt))/input_step)
-            istep = int((julianday-1)*(24*3600/input_step)) + ist
-    
+          !if (mod(int(id*dt),input_step).eq.0) then
+            !ist = int((id*int(dt))/input_step)
+          istep_new = max(1, 1 + nint((dble(i_day-1)*86400.d0 + dble(id-1)*dt) / dble(input_step)))
+          if (istep_new.NE.istep) then 
+            istep = istep_new
           ! Reload changes in t, s, light, ice (needed for FABM/biology)
             call model%link_interior_data(fabm_standard_variables%temperature, t(:,:,istep))
             call model%link_interior_data(fabm_standard_variables%practical_salinity, s(:,:,istep))
@@ -1160,18 +1161,11 @@
     
             !_______vertical diffusion________!
                 do i=i_min, i_max
-                    if (i_day.eq.200.and.id.eq.1) then
-                        open(10,FILE = 'Kzti_before.dat', status='unknown', action='write')
-                        write(10, '(A)') 'k,julianday,z,kzti,kz,kz_mol,kz_bio'  ! Header
-                        do k=1,k_max
-                            write(10, '(I4, ",", I4, ",", F13.5, ",", F20.12, ",", F20.12, ",", ES24.16, ",", ES24.16)') k, julianday, z(k), kzti(1,k,1), kz(1,k,julianday),kz_mol(1,k,1),kz_bio(1,k)
-                        end do
-                    endif
 
                     call calculate_phys(i, k_max, par_max, model, cc, kzti, fick, &
                         dcc, bctype_top, bctype_bottom, bc_top, bc_bottom, &
                         surf_flux, bott_flux, bott_source, k_bbl_sed, dz, hz, kz, &
-                        kz_mol, kz_bio, julianday, id_O2, K_O2s, dt, freq_turb, &
+                        kz_mol, kz_bio, istep, julianday, id_O2, K_O2s, dt, freq_turb, &
                         diff_method, cnpar, surf_flux_with_diff,bott_flux_with_diff, &
                         bioturb_across_SWI, pF1, pF2, phi_inv, is_solid, cc0)
 
