@@ -24,10 +24,32 @@
   
   
       implicit none
-      !all is private
-      private
+      
+      private                             !everything is private unless made public
       !public functions
+      public :: open_forcing_file         ! open NetCDF, detect layout, build year bins
+      public :: load_variable_year        ! fetch vertical profiles per year
       public init_netcdf, input_netcdf_2, save_netcdf, close_netcdf
+
+      logical, save :: forcing_init = .false.
+      class(type_input), allocatable, save :: nc
+
+      integer, save :: nt = 0, nz = 0
+      character(len=16), save :: depth_name = 'depth'
+      logical, save :: dims_are_depth_time = .true.   ! flip if your file uses (time,depth)
+
+      ! time axes (we keep only year+doy; 'time' strings are converted into these)
+      integer,  allocatable, save :: year_in(:), doy_in(:)
+
+      ! per-year bins: year k covers indices [year_start_idx(k) .. year_last_idx(k)-1]
+      integer, allocatable, save :: years(:)           ! list of years present
+      integer, allocatable, save :: year_start_idx(:)  ! first forcing index of each year
+      integer, allocatable, save :: year_last_idx(:)    ! last  forcing index of each year
+      integer, allocatable, save :: days_in_year(:)    ! number of days in each year
+      integer, allocatable, save :: nrecs_in_year(:)   ! number of records in each year
+
+
+
       !netCDF file id
       integer               :: nc_id
       integer, allocatable  :: parameter_id(:)
@@ -45,6 +67,199 @@
   
       contains
   !=======================================================================================================================
+      subroutine open_forcing_file(z_w)
+
+        use io_ascii, only: get_brom_name, get_brom_par
+
+        character(len=:), allocatable :: ncfile
+        integer :: start_year, first_day, last_day, repeat_forcing_year
+        integer :: use_hice, use_swradWm2    ! Optional variables to load
+
+        logical :: has_year, has_doy, has_day_of_year
+        integer :: i, k, kstart, kk, rem
+        real(rk), allocatable :: tmp(:)
+        real(rk), allocatable, intent(out) :: z_w(:)
+         
+        ! Read settings
+        ncfile = get_brom_name("ncinfile_name")
+        start_year = get_brom_par("start_year")
+        first_day = get_brom_par("first_day")
+        last_day = get_brom_par("last_day")
+        repeat_forcing_year = get_brom_par("repeat_forcing_year")
+        use_hice    = get_brom_par("use_hice")
+        use_swradWm2= get_brom_par("use_swradWm2")
+
+        ! Open file
+        if (allocated(nc)) deallocate(nc)
+        allocate(nc); nc = type_input(ncfile)
+
+        if (.not. nc%var_exists(depth_name)) stop 'FATAL (io_netcdf): Missing depth dimension in netcdf file'
+        nz = nc%get_1st_dim_length(depth_name); if (nz<=0) stop 'FATAL (io_netcdf): Depth dimension <=0'
+        if (allocated(z_w)) deallocate(z_w)
+        allocate(z_w(nz))
+        z_w = nc%get_column(depth_name)
+
+        ! --- detect layout ---
+        has_year        = nc%var_exists('year')
+        has_doy         = nc%var_exists('doy')
+        has_day_of_year = nc%var_exists('day_of_year')
+
+        if (.not. has_year .or. (.not. has_doy .and. .not. has_day_of_year)) then
+          stop 'FATAL (io_netcdf): Require numeric "year" and "doy" (or "day_of_year")'
+        end if
+
+        ! Read year(:) as real -> int
+        tmp = nc%get_column('year')
+        nt  = size(tmp); if (nt<=0) stop 'FATAL (io_netcdf): nt <= 0 (year)'
+        if (allocated(year_in)) deallocate(year_in, doy_in)
+        allocate(year_in(nt)); year_in = int(tmp)
+
+        ! Read doy/day_of_year as real -> int
+        if (has_doy) then
+          tmp = nc%get_column('doy')
+        else
+          tmp = nc%get_column('day_of_year')
+        end if
+        allocate(doy_in(nt));  doy_in  = int(tmp)
+
+        ! --- Build per-year bins: years(k) covers indices [year_start_idx(k) .. year_last_idx(k)] ---
+        k = 1
+        do i = 2, nt
+          if (year_in(i) /= year_in(i-1)) k = k + 1
+        end do
+        if (allocated(years)) deallocate(years, year_start_idx, year_last_idx)
+        allocate(years(k), year_start_idx(k), year_last_idx(k))
+
+        k = 1; years(k) = year_in(1); year_start_idx(k) = 1
+        do i = 2, nt
+          if (year_in(i) /= year_in(i-1)) then
+            year_last_idx(k) = i-1
+            k = k + 1
+            years(k) = year_in(i); year_start_idx(k) = i
+          end if
+        end do
+        year_last_idx(k) = nt
+
+        ! Per-year summaries (unique days present; total records)
+        if (allocated(days_in_year)) deallocate(days_in_year, nrecs_in_year)
+        allocate(days_in_year(size(years)), nrecs_in_year(size(years)))
+        do k=1, size(years)
+          days_in_year(k)  = max(1, maxval(doy_in(year_start_idx(k):year_last_idx(k))))
+          nrecs_in_year(k) = year_last_idx(k) - year_start_idx(k) + 1
+        end do
+
+        ! Print Summary
+        write(*,'(a)') 'Forcing years detected:  year   days   records'
+        do k=1, size(years)
+          write(*,'(i8,2x,i5,2x,i8)') years(k), days_in_year(k), nrecs_in_year(k)
+        end do
+
+        ! --- Sanity check: coverage for simulation period ---
+        kstart = find_year_index(start_year)
+        if (kstart == 0) then
+          write(*,*) 'FATAL (io_netcdf): start_year ', start_year, ' not found in forcing.'
+          stop
+        end if
+
+        ! day bounds in the start year
+        if (first_day < 1 .or. first_day > days_in_year(kstart)) then
+          write(*,*) 'FATAL (io_netcdf): first_day=', first_day, ' outside year ', years(kstart), &
+                    ' [1..', days_in_year(kstart), '].'
+          stop
+        end if
+
+        if (repeat_forcing_year == 1) then
+          if (last_day < first_day) then
+            write(*,*) 'FATAL (io_netcdf): last_day < first_day (', last_day, ' < ', first_day, ').'
+            stop
+          end if
+        else
+          ! No repeat: we must have enough consecutive years in the file to cover last_day
+          rem = last_day - first_day + 1
+          if (rem <= 0) then
+            write(*,*) 'FATAL (io_netcdf): last_day < first_day (', last_day, ' < ', first_day, ').'
+            stop
+          end if
+
+          ! consume remaining days across bins until satisfied
+          rem = rem - (days_in_year(kstart) - (first_day - 1))
+          kk = kstart + 1
+          do while (rem > 0)
+            if (kk > size(years)) then
+              write(*,*) 'FATAL (io_netcdf): forcing ends before last_day is reached. Need ', rem, &
+                        ' more day(s) after year ', years(kk-1), '.'
+              stop
+            end if
+            rem = rem - days_in_year(kk)
+            kk = kk + 1
+          end do
+        end if        
+
+        ! -------- sanity check: variables present (required & optional-enabled) --------
+        if (.not. nc%var_exists('temperature')) stop 'FATAL (io_netcdf): Missing variable "temperature" in netcdf file'
+        if (.not. nc%var_exists('salinity')) stop 'FATAL (io_netcdf): Missing variable "salinity" in netcdf file'
+        if (.not. nc%var_exists('Kz')) stop 'FATAL (io_netcdf): Missing variable "Kz" in netcdf file'
+        if (use_hice.eq.1) then
+          if (.not. nc%var_exists('hice')) stop 'FATAL (io_netcdf): Missing variable "hice" in netcdf file'
+        end if
+        if (use_swradWm2.eq.1) then
+          if (.not. nc%var_exists('swradWm2')) stop 'FATAL (io_netcdf): Missing variable "swradWm2" in netcdf file'
+        end if
+
+        forcing_init = .true.
+
+      end subroutine open_forcing_file
+    
+
+
+
+      !------------------------------------------------------------
+      ! Load a single year's forcing data for one variable.
+      ! Inputs:
+      !   varname  - name of variable (e.g. "temperature")
+      !   kyear    - index into years(:), i.e. which year bin
+      !
+      ! Output:
+      !   out(nz, nrec) - variable slice for that year
+      !                   (depth × records_in_year)
+      !------------------------------------------------------------
+      subroutine load_variable_year(varname, year, out)
+        use types_mod, only: rk
+        implicit none
+        character(*), intent(in)  :: varname
+        integer,      intent(in)  :: year      ! actual year number
+        real(rk),     allocatable, intent(out) :: out(:,:)
+      
+        real(rk), allocatable :: full(:,:)
+        integer :: k, nrec
+      
+        if (.not. forcing_init) stop 'FATAL (io_netcdf): call open_forcing_file first'
+      
+        ! find which bin this year belongs to
+        k = find_year_index(year)
+        if (k == 0) stop 'FATAL (io_netcdf): requested year not found in forcing file'
+      
+        nrec = year_last_idx(k) - year_start_idx(k) + 1
+      
+        full = nc%get_array(trim(varname))
+      
+        if (size(full,1) == nz) then
+          ! Layout (depth, time)
+          allocate(out(nz, nrec))
+          out(:,:) = full(:, year_start_idx(k):year_last_idx(k))
+      
+        else if (size(full,2) == nz) then
+          ! Layout (time, depth)
+          allocate(out(nz, nrec))
+          out(:,:) = transpose(full(year_start_idx(k):year_last_idx(k), :))
+      
+        else
+          stop 'FATAL (io_netcdf): variable "'//trim(varname)//'" has unexpected shape'
+        end if
+      end subroutine load_variable_year 
+
+
+
       subroutine input_netcdf_2(z_w, dz_w, hz_w, t_w, s_w, kz_w, use_swradWm2, &
           hice, swradWm2, aice, use_hice, gargett_a0, gargett_q, use_gargett, &
           Kb, pb, dzeta, year, i_max, steps_in_yr, k_wat_bbl, u_x_w)
@@ -646,7 +861,66 @@
   
   
   
-  !=======================================================================================================================
+  !===============Helpers=================================================================================================
+  
+    subroutine lower_bound_int(a, x, idx)
+        integer, intent(in) :: a(:), x
+        integer, intent(out):: idx
+        integer :: lo, hi, mid, n
+        n = size(a); lo = 1; hi = n+1
+        do while (lo < hi)
+          mid = (lo + hi)/2
+          if (a(mid) < x) then
+            lo = mid + 1
+          else
+            hi = mid
+          end if
+        end do
+        idx = min(lo, n)
+    end subroutine
+
+    subroutine upper_bound_int(a, x, idx)
+        integer, intent(in) :: a(:), x
+        integer, intent(out):: idx
+        integer :: lo, hi, mid, n
+        n = size(a); lo = 1; hi = n+1
+        do while (lo < hi)
+          mid = (lo + hi)/2
+          if (a(mid) <= x) then
+            lo = mid + 1
+          else
+            hi = mid
+          end if
+        end do
+        idx = min(lo, n)
+    end subroutine
+
+    integer function find_year_index(yeartofind) result(k)
+      integer, intent(in) :: yeartofind
+      integer :: j
+      k = 0
+      do j=1, size(years)
+        if (years(j) == yeartofind) then
+          k = j; return
+        end if
+      end do
+    end function
+
+    pure logical function is_leap_gregorian(y) result(isleap)
+      integer, intent(in) :: y
+      isleap = (mod(y,4)==0 .and. (mod(y,100)/=0 .or. mod(y,400)==0))
+    end function
+
+
+
+
+
+
+
+
+
+
+
       integer function set_attributes(ncid,id,                         &
                                       units,long_name,                 &
                                       valid_min,valid_max,valid_range, &
