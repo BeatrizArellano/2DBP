@@ -43,7 +43,7 @@
     
         !Solution parameters to be read from brom.yaml (see brom.yaml for details)
         integer   :: i_min, i_max       !x-axis related
-        integer   :: k_min, k_wat_bbl,k_wat_bbl_manual, k_bbl_sed !z-axis related
+        integer   :: k_min, k_wat_bbl, k_bbl_sed !z-axis related
         integer   :: k_points_below_water, k_max, k_storm !z-axis related
         integer   :: par_max                     !no. BROM variables
         integer   :: i_day, year, days_in_yr, freq_turb, freq_sed, freq_float, last_day, multiyears_physics  !time related ! ?? freq_sed, freq_turb
@@ -78,7 +78,7 @@
         real(rk), allocatable, dimension(:,:,:,:)  :: cc_hmix ! relaxation
     
         !Grid parameters and forcings for water column only
-        real(rk), allocatable, dimension(:)        :: z_w, dz_w, hz_w
+        real(rk), allocatable, dimension(:)        :: depths, z_w, dz_w, hz_w
         real(rk), allocatable, dimension(:,:,:)    :: t_w, s_w, kz_w, u_x_w
         real(rk), allocatable, dimension(:,:,:,:)  :: cc_hmix_w
     
@@ -155,7 +155,6 @@
     !    k_wat_bbl = get_brom_par("k_wat_bbl")
         hz_sed_min = get_brom_par("hz_sed_min")
         hz_sed_min = get_brom_par("hz_sed_min")
-        k_wat_bbl_manual = get_brom_par("k_wat_bbl_manual")
         k_points_below_water = get_brom_par("k_points_below_water")
         i_min = get_brom_par("i_min")
         i_max = get_brom_par("i_max")
@@ -329,6 +328,7 @@
     
         !Input forcing data
         if (input_type.eq.0) then !Input sinusoidal seasonal changes (hypothetical)
+            stop 'FATAL (brom-transport): input_type=0 (sinusoidal forcing) not supported at the moment.'
             call input_primitive_physics(z_w, dz_w, hz_w, k_wat_bbl, water_layer_thickness, t_w, s_w, kz_w, i_max, days_in_yr)
             allocate(hice(days_in_yr))
             allocate(swradWm2(days_in_yr))
@@ -339,6 +339,7 @@
             write(*,*) "Done sinusoidal input"
         end if
         if (input_type.eq.1) then !Input physics from ascii
+            stop 'FATAL (brom-transport): input_type=1 (ASCII forcing) not supported at the moment.'
             call input_ascii_physics(z_w, dz_w, hz_w, k_wat_bbl, water_layer_thickness, t_w, s_w, kz_w, i_max, days_in_yr)
             allocate(hice(days_in_yr))
             allocate(swradWm2(days_in_yr))
@@ -350,15 +351,17 @@
             aice = 0.0_rk
             write(*,*) "Done ascii input"
         end if
-        if (input_type.eq.2) then !Input water column physics from netcdf
-            call input_netcdf_2(z_w, dz_w, hz_w, t_w, s_w, kz_w, use_swradWm2, &
-            hice, swradWm2, aice, use_hice, gargett_a0, gargett_q, use_gargett, &
-            Kb, pb, dzeta, year, i_max, steps_in_yr, k_wat_bbl, u_x_w)
-            kz_w=kz_w*mult_Kz
-            write(*,*) "Done netcdf input"
+        if (input_type.eq.2) then 
+            !-----------------------------------------------------------------
+            ! Loading water column physics from netCDF forcing file
+            !   - opens forcing file
+            !   - loads depth dimension (z_w)
+            !-----------------------------------------------------------------
+            call open_forcing_file(z_w)
+            write(*,*) "NetCDF forcing successfully loaded (depth axis and metadata)"
             !Note: This uses the netCDF file to set z_w = layer midpoints, dz_w = increments between layer midpoints, hz_w = layer thicknesses
         end if
-        if(k_wat_bbl_manual.lt.k_wat_bbl) k_wat_bbl=k_wat_bbl_manual
+
         !Determine total number of vertical grid points (layers) now that k_wat_bbl is determined
         k_max = k_wat_bbl + k_points_below_water
     
@@ -410,24 +413,27 @@
         allocate(kzti(i_max,k_max+1,par_max))
         allocate(kztCFL(k_max-1,par_max))
         allocate(wCFL(k_max-1,par_max))
-    !    allocate(k_sed(k_max-k_bbl_sed))
-    !    allocate(k_sed1(k_max+1-k_bbl_sed))
         allocate(k_bbl1(k_bbl_sed-k_wat_bbl))
         allocate(z1(k_max+1))
         allocate(z_s1(k_max+1))
         allocate(kzCFL(k_bbl_sed-1,steps_in_yr))
         allocate(kz_molCFL(k_max-1,par_max))
-    
-        if (k_points_below_water==0) then  !This is to "unlock" BBL and sediments for a "classical" water column model
+
+        call compute_thicknesses(z_w, dz_w, hz_w)    
+        if (k_points_below_water==0) then
+            ! Classical only water-column case (no BBL, no sediments).
             k_max=k_wat_bbl
             z=z_w
             dz=dz_w
             hz=hz_w
             k_bbl_sed=k_wat_bbl !needed for Irradiance calculations
+            write(*,*) "Constructed only water column grid (", k_max, " layers)."
         else
-            !Construct the full vertical grid
-            call make_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
-            write(*,*) "Made vertical grid"
+            ! Water + BBL + sediment layers.
+            ! The deepest pelagic layer is adjusted to insert BBL layers,
+            ! then sediment layers are added below until reaching bottom.
+            call build_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
+            write(*,*) "Constructed water+BBL+sediment grid (", k_max, " layers; BBL ends at ", k_bbl_sed, ")."
             allocate(k_wat(k_bbl_sed))
             allocate(k_sed(k_max-k_bbl_sed))
             allocate(k_sed1(k_max+1-k_bbl_sed))
