@@ -41,7 +41,7 @@
         type (brom_name), pointer :: first_name
     
         public find_index, porting_initial_state_variables, init_common, saving_state_variables, saving_state_variables_diag,&
-               get_brom_par, get_brom_name, svan, make_vert_grid, input_primitive_physics, input_ascii_physics, &
+               get_brom_par, get_brom_name, svan, compute_thicknesses, build_vert_grid, input_primitive_physics, input_ascii_physics, &
                make_physics_bbl_sed, find_closest_index
     
         contains
@@ -509,14 +509,37 @@
         end subroutine saving_state_variables
     !=======================================================================================================================
     
-    
-    
-    
-    
+
+    !=======================================================================================================================
+        subroutine compute_thicknesses(z_w, dz_w, hz_w)
+
+            !Computes the layer thicknesses in the water column 
+
+            use types_mod, only: rk
+            implicit none
+            real(rk), intent(in)  :: z_w(:)
+            real(rk), allocatable, intent(out) :: dz_w(:), hz_w(:)
+            integer :: nz, k
+          
+            nz = size(z_w)
+            allocate(dz_w(nz), hz_w(nz))
+          
+            ! Layer thicknesses
+            dz_w(1:nz-1) = z_w(2:nz) - z_w(1:nz-1)
+            dz_w(nz) = dz_w(nz-1)
+          
+            ! Half thicknesses
+            hz_w(1) = z_w(1) + 0.5_rk*dz_w(1)
+            do k = 2, nz
+               hz_w(k) = 0.5_rk * (dz_w(k-1) + dz_w(k))
+            end do
+          end subroutine compute_thicknesses
     
     
     !=======================================================================================================================
-        subroutine make_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
+    
+    !=======================================================================================================================
+        subroutine build_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
     
         !Constructs full vertical grid (water + sediments) given water column parameters and parameters from brom.yaml
     
@@ -665,7 +688,7 @@
         close(10) 
     
     
-        end subroutine make_vert_grid
+        end subroutine build_vert_grid
     !=======================================================================================================================
     
     
