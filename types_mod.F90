@@ -51,6 +51,7 @@ module types_mod
     procedure:: get_array
     procedure:: get_column
     procedure:: get_value
+    procedure:: var_exists
   end type
 contains
   subroutine inverse(self)
@@ -332,4 +333,27 @@ contains
                        "Wrong variable")
     end select
   end function
+
+  logical function var_exists(self, inname) result(found)
+    class(list_variables), intent(inout) :: self
+    character(len=*),      intent(in)    :: inname
+    class(*), pointer :: curr
+
+    found = .false.
+    call self%reset()
+    do
+      if (.not. self%moreitems()) exit
+      curr => self%get_item()
+      select type(curr)
+      class is(variable)
+        if (trim(curr%name) == trim(inname)) then
+          found = .true.
+          return
+        end if
+      end select
+      call self%next()
+    end do
+  end function var_exists
+
+
 end module
