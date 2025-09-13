@@ -29,6 +29,9 @@
       !public functions
       public :: open_forcing_file         ! open NetCDF, detect layout, build year bins
       public :: load_variable_year        ! fetch vertical profiles per year
+      public :: load_variable_year_1d        ! fetch vertical profiles per year
+      public :: find_year_index
+      public :: days_in_year, years, year_start_idx, year_last_idx, nrecs_in_year
       public init_netcdf, save_netcdf, close_netcdf
 
       logical, save :: forcing_init = .false.
@@ -215,6 +218,8 @@
 
       !------------------------------------------------------------
       ! Load a single year's forcing data for one variable.
+      !   Assumes var(:,:) with depth dimension present.
+      !   Handles both (depth,time) and (time,depth) layouts.
       ! Inputs:
       !   varname  - name of variable (e.g. "temperature")
       !   kyear    - index into years(:), i.e. which year bin
@@ -259,9 +264,40 @@
       end subroutine load_variable_year 
 
 
-  
-  
-  
+      !------------------------------------------------------------
+      ! Load a single year's forcing data for a time-only variable.
+      !   Assumes var(:) with only a time dimension.
+      ! Inputs:
+      !   varname  - name of variable (e.g. "swradWm2")
+      !   year     - actual year number
+      !
+      ! Output:
+      !   out(nrec) - time series for that year
+      !------------------------------------------------------------
+      subroutine load_variable_year_1d(varname, year, out)
+        use types_mod, only: rk
+        implicit none
+        character(*), intent(in)  :: varname
+        integer,      intent(in)  :: year      ! actual year number
+        real(rk),     allocatable, intent(out):: out(:)
+
+        real(rk), allocatable :: full(:)
+        integer :: k, nrec
+
+        if (.not. forcing_init) stop 'FATAL (io_netcdf): call open_forcing_file first'
+
+        ! find which bin this year belongs to
+        k = find_year_index(year)
+        if (k == 0) stop 'FATAL (io_netcdf): requested year not found in forcing file'
+
+        nrec = year_last_idx(k) - year_start_idx(k) + 1
+
+        full = nc%get_column(trim(varname))
+
+        ! Slice to year
+        allocate(out(nrec))
+        out(:) = full(year_start_idx(k):year_last_idx(k))
+      end subroutine load_variable_year_1d
   
   
   
