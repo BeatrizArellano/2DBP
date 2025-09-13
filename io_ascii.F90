@@ -301,7 +301,7 @@
     
     
     !=======================================================================================================================
-        subroutine porting_initial_state_variables(icfile_name, model_year, julianday, i_max, k_max, par_max, &
+        subroutine porting_initial_state_variables(icfile_name, model_year, julianday, k_max, par_max, &
                                                     par_name, cc, vv)
     
         !Reads in initial conditions from an ascii file <icfilename>
@@ -309,19 +309,18 @@
     
         !Input variables
         character(len=*), intent(in)            :: icfile_name
-        integer, intent(in)                     :: model_year, julianday, i_max, k_max, par_max
+        integer, intent(in)                     :: model_year, julianday, k_max, par_max
         character(len=*), intent(in)            :: par_name(:)
     
-        !Output variables
-    !   real(rk), dimension(:,:,:), pointer, intent(out) :: cc, vv
-        real(rk), dimension(:,:,:), intent(inout) :: cc, vv
+        !Output variables    
+        real(rk), dimension(:,:), intent(inout) :: cc, vv
     
         !Local variables
         integer                                 :: d_year_start, julianday_start, k_max_start, par_max_start
         integer, allocatable                    :: column2state(:)
         character(20000)                        :: labels
         character(200)                          :: comments
-        integer                                 :: i, j, k, ip, istart, istop, foo, m
+        integer                                 :: j, k, ip, istart, istop, foo, m
         real(rk)                                :: value
     
         open(9,file=icfile_name)
@@ -339,28 +338,27 @@
         end do
     
         read(9, *) comments
-        do i=1,i_max
-            do k=1,k_max
-                read(9, '( i5 )', advance = 'no') foo
-                read(9, '( i5 )', advance = 'no') foo
-                read(9, '( 1x,f10.4 )', advance = 'no') value !we don't read again z()
-                do m=1,4
-                    read(9, '( 1x,f15.9 )', advance = 'no') value !we don't read again t,s,Kz,hz
+        ! Read depth levels
+            do k = 1, k_max
+                read(9, '( i5 )', advance = 'no') foo    ! k index (ignored)
+                read(9, '( 1x,f10.4 )', advance = 'no') value ! depth z(k), ignored
+                do m = 1, 4
+                    read(9, '( 1x,f15.9 )', advance = 'no') value ! t, s, Kz, hz (ignored here)
                 end do
-                read(9, '( 1x,f15.9 )', advance = 'no') vv(i,k,1)
-                do ip=1,par_max
-                    read(9, '( 1x, f17.9 )', advance = 'no') value
+                read(9, '( 1x,f15.9 )', advance = 'no') vv(k,1)   ! volume or related variable
+                do ip = 1, par_max
+                    read(9, '( 1x,f17.9 )', advance = 'no') value
                     if (ip /= -1) then
                         if (value /= 0.) then
-                            cc(i,k,ip) = value
+                            cc(k,ip) = value
                         else
-                            cc(i,k,ip) = 0.000
+                            cc(k,ip) = 0.000
                         end if
                     end if
                 end do
                 read(9, *)
             end do
-        end do
+
         close(9)
     
         end subroutine porting_initial_state_variables
@@ -453,23 +451,22 @@
     
     
     !=======================================================================================================================
-        subroutine saving_state_variables(outfile_name, model_year, julianday, i_max, k_max, par_max, par_name, &
+        subroutine saving_state_variables(outfile_name, model_year, julianday, k_max, par_max, par_name, &
                                             z, hz, cc, vv, t, s, kz)
     
         !Saves final conditions in an ascii file <outfilename>
     
         !Input variables
         character (len = *), intent(in)            :: outfile_name
-        integer, intent(in)                        :: model_year, julianday, i_max, k_max, par_max
+        integer, intent(in)                        :: model_year, julianday, k_max, par_max
         character(len=*), intent(in)               :: par_name(:)
         real(rk), dimension(:), intent(in)         :: z, hz
-        real(rk), dimension(:,:,:), intent(in)     :: cc
-        real(rk), dimension(:,:,:), intent(in)     :: vv
-        real(rk), dimension (:,:,:), intent(in)    :: t, s, kz
+        real(rk), dimension(:,:), intent(in)       :: cc
+        real(rk), dimension(:,:), intent(in)       :: vv
+        real(rk), dimension (:,:), intent(in)      :: t, s, kz
     
         !Local variables
-        integer :: ip, k, i
-    
+        integer :: ip, k
     
         open(10,file=outfile_name)
     
@@ -486,23 +483,21 @@
         end do
         write(10,*)
     
-        !Subsequent lines: one for each depth level
-        do i=1,i_max
+        !Subsequent lines: one for each depth level        
             do k=1,k_max
-                write(10,'(i5)',advance='NO') i
                 write(10,'(i5)',advance='NO') k
                 write(10,'(1x,f10.4)',advance='NO') z(k)
-                write(10,'(1x,f15.9)',advance='NO') t(i,k,julianday)
-                write(10,'(1x,f15.9)',advance='NO') s(i,k,julianday)
-                write(10,'(1x,f15.9)',advance='NO') kz(i,k,julianday)
+                write(10,'(1x,f15.9)',advance='NO') t(k,julianday)
+                write(10,'(1x,f15.9)',advance='NO') s(k,julianday)
+                write(10,'(1x,f15.9)',advance='NO') kz(k,julianday)
                 write(10,'(1x,f15.9)',advance='NO') hz(k)
-                write(10,'(1x,f15.9)',advance='NO') vv(i,k,1)
+                write(10,'(1x,f15.9)',advance='NO') vv(k,1)
                 do ip=1,par_max
-                    write(10,'(1x,f17.9)',advance='NO') cc(i,k,ip)
+                    write(10,'(1x,f17.9)',advance='NO') cc(k,ip)
                 end do
                 write(10,*)
             end do
-        end do
+
     
         close(10)
     
