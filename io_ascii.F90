@@ -42,7 +42,7 @@
     
         public find_index, porting_initial_state_variables, init_common, saving_state_variables, saving_state_variables_diag,&
                get_brom_par, get_brom_name, svan, compute_thicknesses, build_vert_grid, input_primitive_physics, input_ascii_physics, &
-               make_physics_bbl_sed, find_closest_index
+               make_physics_bbl_sed, find_closest_index, build_swrad_year, build_year_forcing
     
         contains
     
@@ -685,9 +685,117 @@
     
         end subroutine build_vert_grid
     !=======================================================================================================================
+
+    !=======================================================================================================================
+        !> Construct full-depth annual forcing arrays (T, S, Kz) for the model
+        !!
+        !! This routine takes water-column forcing arrays (temperature, salinity,
+        !! vertical diffusivity) provided on the water-column grid from the
+        !! forcing file, and extends them to the full vertical grid of the model
+        !! (including BBL and sediments).
+        !!
+        !!   - Copy forcing values for all water-column layers directly.
+        !!   - Below the water column, repeat the bottom value (constant T, S).
+        !!   - Compute dynamic BBL vertical diffusivity: linearly decreases from
+        !!     the bottom water-column value to zero at the sediment–water
+        !!     interface (SWI), with a cutoff thickness `dbl_thickness`.
+        subroutine build_year_forcing(k_max, k_wat_bbl, k_bbl_sed, &
+                                      z1, z_bbl_sed, dbl_thickness, &
+                                      t_w, s_w, kz_w, t, s, kz)
+
+            implicit none
+            ! Arguments
+            integer, intent(in)                   :: k_max, k_wat_bbl, k_bbl_sed
+            real(rk), intent(in)                  :: dbl_thickness
+            real(rk), dimension(:,:), intent(in)  :: t_w, s_w, kz_w   ! forcing arrays from file
+            real(rk), dimension(:), intent(in)    :: z1               ! interface depths
+            real(rk), intent(in)                  :: z_bbl_sed
+            real(rk), dimension(:,:), allocatable, intent(out) :: t, s, kz  ! full model arrays
+
+            ! Locals
+            real(rk) :: kz_gr, bbl_thickness
+            integer  :: nsteps, k, tstep
+
+            ! number of forcing timesteps (using size of loaded data)
+            nsteps = size(t_w, 2)
+
+            ! Allocate outputs
+            if (allocated(t))  deallocate(t)
+            if (allocated(s))  deallocate(s)
+            if (allocated(kz)) deallocate(kz)
+
+            allocate(t(k_max, nsteps))
+            allocate(s(k_max, nsteps))
+            allocate(kz(k_max, nsteps))
+
+            !---------------------------------------------------------
+            ! Assign forcing to full vertical grid
+            !---------------------------------------------------------
+
+            ! Copy water-column values directly for all timesteps
+            t(1:k_wat_bbl, :) = t_w(1:k_wat_bbl, :)
+            s(1:k_wat_bbl, :) = s_w(1:k_wat_bbl, :)
+            kz(1:k_wat_bbl,:) = kz_w(1:k_wat_bbl,:)
+
+            ! Extend values below water column assuming the bottom value is constant in BBL and sediments
+            s(k_wat_bbl:k_max,:) = spread(s_w(k_wat_bbl-1,:), dim=1, ncopies=k_max-k_wat_bbl+1)
+            t(k_wat_bbl:k_max,:) = spread(t_w(k_wat_bbl-1,:), dim=1, ncopies=k_max-k_wat_bbl+1)
+            !s(k_wat_bbl:k_max,:) = s_w(k_wat_bbl-1,:)
+            !t(k_wat_bbl:k_max,:) = t_w(k_wat_bbl-1,:)
+            
+            ! Initialize kz below water column as zero
+            kz(k_wat_bbl+1:k_max,:) = 0.0_rk
+            ! Dynamic BBL diffusivity (decreases linearly from bottom water-column value to zero at SWI)
+            bbl_thickness = z_bbl_sed - dbl_thickness - z1(k_wat_bbl)
+            if (abs(bbl_thickness) > 1.0e-12_rk) then
+                do tstep=1,nsteps
+                    kz_gr = (0.0_rk - kz(k_wat_bbl,tstep)) / bbl_thickness
+                    do k=k_wat_bbl+1,k_bbl_sed
+                        kz(k,tstep) = max(0.0_rk, kz(k_wat_bbl,tstep) + kz_gr*(z1(k)-z1(k_wat_bbl)))
+                    end do
+                end do
+            else
+                write(*,*) 'WARNING: build_year_forcing - BBL thickness nearly zero, skipping dynamic BBL kz gradient.'
+            end if
+
+        end subroutine build_year_forcing
+
+    !=======================================================================================================================
     
-    
-    
+    !=======================================================================================================================
+        subroutine build_swrad_year(Io, latitude, days_in_yr, swradWm2)
+            !! Calculates 
+            use types_mod, only: rk
+            implicit none
+         
+            ! Arguments
+            real(rk), intent(in)  :: Io           ! user parameter [W/m2]
+            real(rk), intent(in)  :: latitude     ! latitude [degrees]
+            integer, intent(in)   :: days_in_yr        ! number of days in year
+            real(rk), allocatable, intent(out) :: swradWm2(:)  ! output array [W/m2]
+         
+            ! Locals
+            integer  :: d
+            real(rk) :: declination
+            real(rk), parameter :: pi=3.141592653589793_rk
+         
+            ! Allocate output array
+            if (allocated(swradWm2)) deallocate(swradWm2)
+            allocate(swradWm2(days_in_yr))
+         
+            ! Loop over all days of the year
+            do d = 1, days_in_yr
+               ! Solar declination in degrees
+               declination = 23.5_rk * sin(2.0_rk * pi * (real(d, rk) - 81.0_rk) / 365.0_rk)
+         
+               ! Simple cosine law for daily mean irradiance
+               swradWm2(d) = max(0.0_rk, Io * cos((latitude - declination) * pi/180.0_rk))
+            end do
+         
+         end subroutine build_swrad_year
+
+
+    !=======================================================================================================================    
     
     
     
