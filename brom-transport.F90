@@ -45,16 +45,17 @@
         integer   :: k_min, k_wat_bbl, k_bbl_sed !z-axis related
         integer   :: k_points_below_water, k_max, k_storm !z-axis related
         integer   :: par_max                     !no. BROM variables
-        integer   :: i_day, start_year, days_in_yr, freq_turb, freq_sed, freq_float, last_day, multiyears_physics  !time related ! ?? freq_sed, freq_turb
-        integer   :: diff_method, kz_bbl_type, bioturb_across_SWI  !vertical diffusivity related
+        integer   :: i_day, start_year, freq_turb, freq_sed, freq_float, last_day, multiyears_physics  !time related ! ?? freq_sed, freq_turb
+        integer   :: diff_method, bioturb_across_SWI  !vertical diffusivity related
         integer   :: h_relax, not_relax_centr  !horizontal transport  (relaxation) switches
-        integer   :: use_swradWm2, use_hice, use_gargett ! use input for light, ice, calculate Kz
+        integer   :: use_swradWm2, use_hice ! use input for light, ice, calculate Kz
         integer   :: input_type, port_initial_state, ncoutfile_type !I/O related
         integer   :: bio_model ! basic ecosystem model: 0- for BROM_bio (default) 1- for OxyDep
         real(rk)  :: dt, water_layer_thickness
         real(rk)  :: K_O2s, gargett_a0, gargett_q, mult_Kz, Kz_storm
     
         ! Free timestep input and output
+        integer   :: year_index, days_in_yr
         integer   :: ist, i_step, input_step, steps_in_yr, output_step ! ist - steps in the course of the day, i_step - step in the course of the year
     
         character(len=64) :: icfile_name, outfile_name, ncoutfile_name
@@ -76,7 +77,7 @@
     
         !Grid parameters and forcings for water column only
         real(rk), allocatable, dimension(:)        :: z_w, dz_w, hz_w
-        real(rk), allocatable, dimension(:,:)    :: t_w, s_w, kz_w
+        real(rk), allocatable, dimension(:,:)      :: t_w, s_w, kz_w
     
         !Grid parameters and forcings for full column including water and sediments
         real(rk), allocatable, dimension(:)        :: z, dz, hz, z1, z_s1
@@ -93,8 +94,7 @@
         integer                                   :: sel, iday, istep
     !    integer                                   :: k_sed(k_max-k_bbl_sed), k_sed1(k_max+1-k_bbl_sed), k_bbl1(k_bbl_sed-k_wat_bbl)
         real(rk)                                  :: z_wat_bbl, z_bbl_sed, kz_gr !, z1(k_max+1), z_s1(k_max+1), phi1(k_max+1)
-        integer                                   :: dynamic_kz_bbl
-        real(rk)                                  :: kz_bbl_max, hz_sed_min, dbl_thickness, kz_mol0
+        real(rk)                                  :: hz_sed_min, dbl_thickness, kz_mol0
         real(rk)                                  :: a1_bioirr, a2_bioirr
         real(rk)                                  :: kz_bioturb_max, z_const_bioturb, z_decay_bioturb
         real(rk)                                  :: phi_0, phi_inf, z_decay_phi, w_binf, rho_def, wat_con_0, wat_con_inf
@@ -153,7 +153,6 @@
         k_points_below_water = get_brom_par("k_points_below_water")
         area_col = get_brom_par("area_col")
         start_year = get_brom_par("start_year")
-        days_in_yr = get_brom_par("days_in_yr")
     
         ! for free length output (assumed to be a day fraction)
         input_step = get_brom_par("input_step")
@@ -177,14 +176,8 @@
         latitude = get_brom_par("latitude")
         Io = get_brom_par("Io")                    !W m-2 maximum surface downwelling irradiance at latitudes <= 23.5N,S
     
-        ! vertical grid params
-    
-        !!Get diffusivity parameters from brom.yaml
-        !Turbulence in the benthic boundary layer
-        kz_bbl_type = get_brom_par("kz_bbl_type")
-        kz_bbl_max = get_brom_par("kz_bbl_max")
+        ! vertical grid params    
         dbl_thickness = get_brom_par("dbl_thickness")
-        dynamic_kz_bbl = get_brom_par("dynamic_kz_bbl")
     
         !Molecular diffusivity of solutes (single constant value, infinite dilution)
         kz_mol0 = get_brom_par("kz_mol0")
@@ -209,15 +202,158 @@
         !Vertical advection in the sediments
         w_binf = get_brom_par("w_binf")
     
-        ! horizontal grid params
-        use_gargett = get_brom_par("use_gargett")
-        gargett_a0 = get_brom_par("gargett_a0")
-        gargett_q = get_brom_par("gargett_q")
         mult_Kz = get_brom_par("mult_Kz")
         Kz_storm = get_brom_par("Kz_storm")
+
+
         !Initialize FABM model from fabm.yaml
         model => fabm_create_omp_model()
         par_max = size(model%interior_state_variables)
+
+        !----------------Open forcing data----------------------------------------------------------------------------------------------------------------
+        if (input_type.eq.0) then !Input sinusoidal seasonal changes (hypothetical)
+            stop 'FATAL (brom-transport): input_type=0 (sinusoidal forcing) not supported at the moment.'
+        end if
+        if (input_type.eq.1) then !Input physics from ascii
+            stop 'FATAL (brom-transport): input_type=1 (ASCII forcing) not supported at the moment.'
+        end if
+        if (input_type.eq.2) then 
+            !-----------------------------------------------------------------
+            ! Loading water column physics from netCDF forcing file
+            !   - opens forcing file and figures out years and days per year
+            !   - loads depth dimension (z_w)
+            !-----------------------------------------------------------------
+            call open_forcing_file(z_w)
+            write(*,*) "NetCDF forcing successfully opened (depth axis and metadata)"
+            !Note: This uses the netCDF file to set z_w = layer midpoints, dz_w = increments between layer midpoints, hz_w = layer thicknesses
+        end if
+
+        !Determine total number of vertical grid points (layers) now that k_wat_bbl is determined
+        k_wat_bbl = size(z_w)
+        k_max = k_wat_bbl + k_points_below_water
+
+        !Determine number of days in the first year
+        year_index = find_year_index(start_year)
+        days_in_yr = days_in_year(year_index)
+    
+        !Allocate full grid variables now that k_max is knownk
+        allocate(z(k_max))
+        allocate(dz(k_max))
+        allocate(hz(k_max))
+        allocate(air_sea_flux(k_max,par_max))
+        allocate(cc_hmix(par_max,k_max,days_in_yr))
+        allocate(kz_mol(k_max+1,par_max))
+        allocate(kz_bio(k_max+1))
+        allocate(pF1(k_max,par_max))
+        allocate(pF2(k_max+1,par_max))
+        allocate(pWC(k_max+1,par_max)) ! water content??
+        allocate(alpha(k_max))
+        allocate(phi(k_max))
+        allocate(wat_content(k_max))
+        allocate(phi1(k_max+1))
+        allocate(phi_inv(k_max))
+        allocate(tortuosity(k_max+1))
+        allocate(w_b(k_max+1))
+        allocate(u_b(k_max+1))
+        allocate(wti(k_max+1,par_max)) ! vertical velocity
+        allocate(cc(k_max,par_max))
+        allocate(cc_out(k_max,par_max))
+        allocate(dcc(k_max,par_max))
+        allocate(dcc_R(k_max,par_max))
+        allocate(fick(k_max+1,par_max))
+        allocate(fick_per_day(k_max+1,par_max))
+        allocate(wbio(k_max,par_max))    !sinking vertical velocity (m/s, negative for sinking)
+        allocate(wbio_2d(k_max,par_max))    !sinking vertical velocity (m/s, negative for sinking)
+        allocate(sink(k_max+1,par_max))  !sinking flux (mmol/m2/s, positive downward)
+        allocate(sink_per_day(k_max+1,par_max))
+        allocate(vv(k_max,1))
+        allocate(dVV(k_max,1))
+        allocate(Izt(k_max))
+        allocate(pressure(k_max))
+        allocate(cell_thickness(k_max))
+        allocate(depth(k_max))
+        allocate(kzti(k_max+1,par_max))
+        allocate(kztCFL(k_max-1,par_max))
+        allocate(wCFL(k_max-1,par_max))
+        allocate(k_bbl1(k_bbl_sed-k_wat_bbl))
+        allocate(z1(k_max+1))
+        allocate(z_s1(k_max+1))
+        allocate(kzCFL(k_bbl_sed-1,days_in_yr))
+        allocate(kz_molCFL(k_max-1,par_max))
+
+        call compute_thicknesses(z_w, dz_w, hz_w)    
+        if (k_points_below_water==0) then
+            ! Classical only water-column case (no BBL, no sediments).
+            k_max=k_wat_bbl
+            z=z_w
+            dz=dz_w
+            hz=hz_w
+            k_bbl_sed=k_wat_bbl !needed for Irradiance calculations
+            write(*,*) "Constructed only water column grid (", k_max, " layers)."
+        else
+            ! Adds BBL and sediment layers
+            ! The deepest layer in the water column is adjusted to insert BBL layers,
+            ! Sediment layers are added below until reaching the bottom.
+            call build_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
+            write(*,*) "Constructed water+BBL+sediment grid (", k_max, " layers; BBL ends at ", k_bbl_sed, ")."
+            allocate(k_wat(k_bbl_sed))
+            allocate(k_sed(k_max-k_bbl_sed))
+            allocate(k_sed1(k_max+1-k_bbl_sed))
+            k_wat = (/(k,k=1,k_bbl_sed)/)       !Index vector for all points in the water column
+            k_sed = (/(k,k=k_bbl_sed+1,k_max)/) !Index vector for all points in the sediments
+            k_sed1 = (/(k,k=k_bbl_sed+1,k_max+1)/) !Indices of layer interfaces in the sediments (including the SWI)
+        endif
+
+        !------------------------------------------------------------
+        ! Compute key interface depths and index vectors for water, BBL, and sediment
+        if (k_points_below_water.gt.0) then  
+            z_wat_bbl = z(k_wat_bbl+1) - 0.5_rk*hz(k_wat_bbl+1)  ! Depth of water–BBL interface (top of BBL)
+            z_bbl_sed = z(k_bbl_sed+1) - 0.5_rk*hz(k_bbl_sed+1)  ! Depth of BBL–sediment interface (sediment-water interface
+            ! Define index vectors for different domains        
+            k_sed  = (/(k,k=k_bbl_sed+1,k_max)/)     ! Indices of layer midpoints in the sediments        
+            k_sed1 = (/(k,k=k_bbl_sed+1,k_max+1)/)   ! Indices of layer interfaces in the sediments (including SWI)        
+            k_bbl1 = (/(k,k=k_wat_bbl+1,k_bbl_sed)/) ! Indices of layer interfaces in the BBL (including its top)
+        else
+            z_wat_bbl = z(k_wat_bbl)    ! If no BBL/sediment points exist take interface depths simply as the last water column midpoints
+            z_bbl_sed = z(k_bbl_sed)
+        endif
+        ! Depth of layer interfaces (z1):
+        ! for each layer, compute the TOP interface as midpoint – half thickness
+        z1(1:k_max) = z(:) - 0.5_rk*hz(:)
+
+        ! Depth of interfaces relative to SWI (zero at sediment-water interface)
+        z_s1 = z1 - z_bbl_sed
+        !------------------------------------------------------------
+
+        !------------------------------------------------------------
+        ! Loading initial variables and building the forcing arrays for the full vertical grid
+        call load_variable_year('temperature', start_year, t_w)
+        call load_variable_year('salinity', start_year, s_w)
+        call load_variable_year('Kz', start_year, kz_w)
+        if (use_swradWm2 == 1) then
+            call load_variable_year_1d('swradWm2', start_year, swradWm2)
+        else
+            allocate(swradWm2(days_in_yr))
+            call build_swrad_year(Io, latitude, days_in_yr, swradWm2)
+        end if
+        if (use_hice.eq.1) then
+            call load_variable_year_1d('hice', start_year, hice)
+            call load_variable_year_1d('aice', start_year, aice)
+        end if
+        if (k_points_below_water>0) then
+            ! Construct full-depth annual forcing arrays (T, S, Kz) for the model
+            ! Below the water column, repeats the bottom value (constant T, S).
+            call build_year_forcing(k_max, k_wat_bbl, k_bbl_sed, &
+                                    z1, z_bbl_sed, dbl_thickness, &
+                                    t_w, s_w, kz_w, t, s, kz)                               
+        end if   
+
+
+        !------------------------------------------------------------
+!!!! Restart checking here 
+
+
+
     
         steps_in_yr = days_in_yr*24*3600/input_step ! determine how much timesteps in the course of the year
         if(multiyears_physics.gt.0) then
@@ -291,114 +427,10 @@
     
         write(*,*) "All other boundary conditions use surface and bottom fluxes from FABM"
     
-        !Input forcing data
-        if (input_type.eq.0) then !Input sinusoidal seasonal changes (hypothetical)
-            stop 'FATAL (brom-transport): input_type=0 (sinusoidal forcing) not supported at the moment.'
-            !call input_primitive_physics(z_w, dz_w, hz_w, k_wat_bbl, water_layer_thickness, t_w, s_w, kz_w, days_in_yr)
-            !allocate(hice(days_in_yr))
-            !allocate(swradWm2(days_in_yr))
-            !allocate(aice(days_in_yr))
-            !hice = 0.0_rk
-            !swradWm2 = 0.0_rk
-            !aice = 0.0_rk
-            !write(*,*) "Done sinusoidal input"
-        end if
-        if (input_type.eq.1) then !Input physics from ascii
-            stop 'FATAL (brom-transport): input_type=1 (ASCII forcing) not supported at the moment.'
-            !call input_ascii_physics(z_w, dz_w, hz_w, k_wat_bbl, water_layer_thickness, t_w, s_w, kz_w, days_in_yr)
-            !allocate(hice(days_in_yr))
-            !allocate(swradWm2(days_in_yr))
-            !allocate(aice(days_in_yr))
-            !hice = 0.0_rk
-            !swradWm2 = 0.0_rk
-            !aice = 0.0_rk
-            !write(*,*) "Done ascii input"
-        end if
-        if (input_type.eq.2) then 
-            !-----------------------------------------------------------------
-            ! Loading water column physics from netCDF forcing file
-            !   - opens forcing file
-            !   - loads depth dimension (z_w)
-            !-----------------------------------------------------------------
-            call open_forcing_file(z_w)
-            write(*,*) "NetCDF forcing successfully loaded (depth axis and metadata)"
-            !Note: This uses the netCDF file to set z_w = layer midpoints, dz_w = increments between layer midpoints, hz_w = layer thicknesses
-        end if
+               
 
-        !Determine total number of vertical grid points (layers) now that k_wat_bbl is determined
-        k_max = k_wat_bbl + k_points_below_water
-    
-        !Allocate full grid variables now that k_max is knownk
-        allocate(z(k_max))
-        allocate(dz(k_max))
-        allocate(hz(k_max))
-        allocate(t(k_max,steps_in_yr))
-        allocate(s(k_max,steps_in_yr))
-        allocate(kz(k_max+1,steps_in_yr))
-        allocate(air_sea_flux(k_max,par_max))
-        allocate(cc_hmix(par_max,k_max,days_in_yr))
-        allocate(kz_mol(k_max+1,par_max))
-        allocate(kz_bio(k_max+1))
-        allocate(pF1(k_max,par_max))
-        allocate(pF2(k_max+1,par_max))
-        allocate(pWC(k_max+1,par_max)) ! water content??
-        allocate(alpha(k_max))
-        allocate(phi(k_max))
-        allocate(wat_content(k_max))
-        allocate(phi1(k_max+1))
-        allocate(phi_inv(k_max))
-        allocate(tortuosity(k_max+1))
-        allocate(w_b(k_max+1))
-        allocate(u_b(k_max+1))
-        allocate(wti(k_max+1,par_max)) ! vertical velocity
-        allocate(cc(k_max,par_max))
-        allocate(cc_out(k_max,par_max))
-        allocate(dcc(k_max,par_max))
-        allocate(dcc_R(k_max,par_max))
-        allocate(fick(k_max+1,par_max))
-        allocate(fick_per_day(k_max+1,par_max))
-        allocate(wbio(k_max,par_max))    !sinking vertical velocity (m/s, negative for sinking)
-        allocate(wbio_2d(k_max,par_max))    !sinking vertical velocity (m/s, negative for sinking)
-        allocate(sink(k_max+1,par_max))  !sinking flux (mmol/m2/s, positive downward)
-        allocate(sink_per_day(k_max+1,par_max))
-        allocate(vv(k_max,1))
-        allocate(dVV(k_max,1))
-        allocate(Izt(k_max))
-        allocate(pressure(k_max))
-        allocate(cell_thickness(k_max))
-        allocate(depth(k_max))
-        allocate(kzti(k_max+1,par_max))
-        allocate(kztCFL(k_max-1,par_max))
-        allocate(wCFL(k_max-1,par_max))
-        allocate(k_bbl1(k_bbl_sed-k_wat_bbl))
-        allocate(z1(k_max+1))
-        allocate(z_s1(k_max+1))
-        allocate(kzCFL(k_bbl_sed-1,steps_in_yr))
-        allocate(kz_molCFL(k_max-1,par_max))
 
-        call compute_thicknesses(z_w, dz_w, hz_w)    
-        if (k_points_below_water==0) then
-            ! Classical only water-column case (no BBL, no sediments).
-            k_max=k_wat_bbl
-            z=z_w
-            dz=dz_w
-            hz=hz_w
-            k_bbl_sed=k_wat_bbl !needed for Irradiance calculations
-            write(*,*) "Constructed only water column grid (", k_max, " layers)."
-        else
-            ! Adds BBL and sediment layers
-            ! The deepest pelagic layer is adjusted to insert BBL layers,
-            ! then sediment layers are added below until reaching bottom.
-            call build_vert_grid(z, dz, hz, z_w, dz_w, hz_w, k_wat_bbl, k_max, k_bbl_sed)
-            write(*,*) "Constructed water+BBL+sediment grid (", k_max, " layers; BBL ends at ", k_bbl_sed, ")."
-            allocate(k_wat(k_bbl_sed))
-            allocate(k_sed(k_max-k_bbl_sed))
-            allocate(k_sed1(k_max+1-k_bbl_sed))
-            k_wat = (/(k,k=1,k_bbl_sed)/)       !Index vector for all points in the water column
-            k_sed = (/(k,k=k_bbl_sed+1,k_max)/) !Index vector for all points in the sediments
-            k_sed1 = (/(k,k=k_bbl_sed+1,k_max+1)/) !Indices of layer interfaces in the sediments (including the SWI)
-        endif
-    
+        
         
         !Initialize tridiagonal matrix if necessary
         if (diff_method.gt.0) then
@@ -539,102 +571,6 @@
     
         !Complete hydrophysical forcings
         cc_hmix=0.0_rk
-    
-        !!Set useful parameters for calculations
-        !Useful depths
-    
-        if (k_points_below_water.gt.0) then
-            z_wat_bbl = z(k_wat_bbl+1) - 0.5_rk*hz(k_wat_bbl+1) !Depth of water-BBL interface
-            z_bbl_sed = z(k_bbl_sed+1) - 0.5_rk*hz(k_bbl_sed+1) !Depth of BBL-sediment interface (SWI)
-        else
-            z_wat_bbl = z(k_wat_bbl)
-            z_bbl_sed = z(k_bbl_sed)
-        endif
-        z1(1:k_max) = z(:)-0.5_rk*hz(:)         !Depth of layer interfaces
-        !z1(k_max+1) = z(k_max)+0.5_rk*hz(k_max)
-        z_s1 = z1-z_bbl_sed                     !Depth of interfaces wrt SWI
-    
-        !Useful index vectors
-        k_sed = (/(k,k=k_bbl_sed+1,k_max)/) !Indices of layer midpoints in the sediments
-        k_sed1 = (/(k,k=k_bbl_sed+1,k_max+1)/) !Indices of layer interfaces in the sediments (including the SWI)
-        k_bbl1 = (/(k,k=k_wat_bbl+1,k_bbl_sed)/) !Indices of layer interfaces in the BBL (including the top)
-    
-    
-        !!Calculate physical forcings
-        !Assume (t, s, cc, hmix_rate) at layer midpoints; (kz, w_b) on interfaces (as in GOTM and ROMS grids):
-        !Note: kz vertical index starts from 1, not 0 as in e.g. GOTM, ROMS
-        !      Using index starting from 0 leads to array misalignment passing between subroutines (PWA, 11/03/2016)
-        !
-        !========= (air-sea interface) kz(1), w_b(1) (unused)
-        !    o     t(1), s(1), cc(1), hmix_rate(1)
-        !--------- kz(2), w_b(2) = 0
-        !    o     t(2), s(2), cc(2), hmix_rate(2)
-        !    :
-        !    :
-        !    o     t(k_wat_bbl), s(k_wat_bbl), cc(k_wat_bbl), hmix_rate(k_wat_bbl)
-        !========= (water-bbl interface) kz(k_wat_bbl+1) = kz_bbl or kz_bbl_max
-        !    o     t(k_wat_bbl+1), s(k_wat_bbl+1), cc(k_wat_bbl+1), hmix_rate(k_wat_bbl+1) = 0
-        !--------- kz(k_wat_bbl+2) = kz_bbl  (if kz_bbl_type = 0)
-        !    o     t(k_wat_bbl+2), s(k_wat_bbl+2), cc(k_wat_bbl+2), hmix_rate(k_wat_bbl+2) = 0
-        !    :
-        !    :
-        !    o     t(k_bbl_sed), s(k_bbl_sed), cc(k_bbl_sed), hmix_rate(k_bbl_sed) = 0
-        !========= (bbl-sediment interface) kz(k_bbl_sed+1) = 0, w_b(k_bbl_sed+1)
-        !    o     t(k_bbl_sed+1), s(k_bbl_sed+1), cc(k_bbl_sed+1), hmix_rate(k_bbl_sed+1) = 0
-        !--------- kz(k_bbl_sed+2) = 0, w_b(k_bbl_sed+2)
-        !    o     t(k_bbl_sed+2), s(k_bbl_sed+2), cc(k_bbl_sed+2), hmix_rate(k_bbl_sed+2) = 0
-        !    :
-        !    :
-        !    o     t(k_max), s(k_max), cc(k_max), hmix_rate(k_max) = 0
-        !========= (bottom) kz(k_max+1), w_b(k_max+1)
-        kz = 0.0_rk
-    !    hmix_rate = 0.0_rk
-    !    cc_hmix = 0.0_rk
-        iday = 1    
-        do istep=1,steps_in_yr
-            if (mod(istep,int(86400/input_step)).eq.0) then
-    !		if (mod(istep,24).eq.0) then
-                iday = iday + 1
-            end if
-    
-            !Salinity (s)
-            s(1:k_wat_bbl,istep)       = s_w(1:k_wat_bbl,istep)
-            !Temperature (t)
-            t(1:k_wat_bbl,istep)       = t_w(1:k_wat_bbl,istep)
-            do k=k_wat_bbl,k_max
-                    s(k,istep) = maxval(s_w(k_wat_bbl-1,:)) !Assume constant below the water column
-                    t(k,istep) = minval(t_w(k_wat_bbl-1,:)) !Assume constant below the water column
-            enddo
-
-            !Vertical diffusivity in water column (kz)
-            kz(1:k_wat_bbl,istep)      = kz_w(1:k_wat_bbl,istep) !Use all values on upper layer interfaces in water column
-    
-            if (dynamic_kz_bbl.eq.0) then !Static kz_bbl
-                if (kz_bbl_type.eq.0) then !Constant kz across BBL
-                    do k=k_wat_bbl+1,k_bbl_sed
-                        if (z1(k) < (z_bbl_sed-dbl_thickness)) then !Note that kz(k) is at depth z1(k) = z(k)-hz(k)/2
-                            kz(k,istep) = kz_bbl_max
-                        else
-                            kz(k,istep) = 0.0_rk !eddy diffusivity kz is assumed to be zero within the diffusive boundary layer
-                        end if
-                    end do
-                end if
-                if (kz_bbl_type.eq.1) then !Linear kz across BBL (~=> log-layer for velocity, Holtappels & Lorke, 2011)
-                    kz_gr = (0.0_rk-kz_bbl_max) / (z_bbl_sed-dbl_thickness-z_wat_bbl)
-                    !Note: kz is assumed to reach zero at height dbl_thickness above the SWI
-                    do k=k_wat_bbl+1,k_bbl_sed
-                        kz(k,istep) = max(0.0_rk, kz_bbl_max + kz_gr * (z1(k)-z_wat_bbl)) !Note that kz(k) is at depth z1(k) = z(k)-hz(k)/2
-                    end do
-                end if
-            end if
-    
-            if (dynamic_kz_bbl.eq.1) then !Dynamic kz_bbl
-                kz_gr = (0.0_rk-kz(k_wat_bbl,istep)) / (z_bbl_sed-dbl_thickness-z1(k_wat_bbl))
-                do k=k_wat_bbl+1,k_bbl_sed
-                    kz(k,istep) = max(0.0_rk, kz(k_wat_bbl,istep) + kz_gr * (z1(k)-z1(k_wat_bbl))) !Note that kz(k) is at depth z1(k) = z(k)-hz(k)/2
-                end do
-            end if
-        end do
 
         !Porosity (phi) (assumed constant in time)
         phi = 1.0_rk
