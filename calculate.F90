@@ -31,7 +31,7 @@
     
     !=======================================================================================================================
         subroutine calculate_phys(k_max, par_max, model, cc, kzti, fick, dcc, bctype_top, bctype_bottom, bc_top, bc_bottom, &
-            surf_flux, bott_flux, bott_source, k_bbl_sed, dz, hz, kz, kz_mol, kz_bio, istep, julianday, id_O2, K_O2s, dt, freq_turb, &
+            surf_flux, bott_flux, bott_source, k_bbl_sed, dz, hz, kz_day, kz_mol, kz_bio, id_O2, K_O2s, dt, freq_turb, &
             diff_method, cnpar, surf_flux_with_diff, bott_flux_with_diff, bioturb_across_SWI, pF1, pF2, phi_inv, is_solid, cc0)
     
         !Calculate vertical diffusion in the water column and sediments
@@ -39,11 +39,11 @@
         implicit none
     
         !Input variables
-        integer, intent(in)                         :: k_max, par_max, k_bbl_sed, istep, julianday, id_O2, freq_turb
+        integer, intent(in)                         :: k_max, par_max, k_bbl_sed, id_O2, freq_turb
         integer, intent(in)                         :: surf_flux_with_diff, bott_flux_with_diff, bioturb_across_SWI
         integer, dimension(:), intent(in)           :: bctype_top, bctype_bottom
-        real(rk), dimension(:), intent(in)          :: bc_top, bc_bottom, kz_bio, phi_inv
-        real(rk), dimension(:,:), intent(in)        :: kz, kz_mol, pF1, pF2
+        real(rk), dimension(:), intent(in)          :: bc_top, bc_bottom, kz_day, kz_bio, phi_inv
+        real(rk), dimension(:,:), intent(in)        :: kz_mol, pF1, pF2
         real(rk), dimension(:), intent(in)          :: dz, hz       !Grid spacings and layer thicknesses
         real(rk), intent(in)                        :: K_O2s        !Half-saturation constant for O2 effect on kz_bio
         real(rk), intent(in)                        :: dt
@@ -83,7 +83,7 @@
                 O2stat = 0.0_rk
             endif
             do ip=1,par_max
-                kzti(:,ip) = kz(:,istep) + kz_mol(:,ip) + kz_bio(:)*O2stat
+                kzti(:,ip) =  kz_day(:) + kz_mol(:,ip) + kz_bio(:)*O2stat
                 !Total diffusivity = turbulent (zero in sediments) + molecular (zero in water column) + bioturbation (zero in water column)
                 !Note: molecular diffusivity is zero for variables that are solid in the sediments (see io_ascii.f90/make_physics_bbl_sed)
             end do
@@ -317,7 +317,7 @@
     
     !=======================================================================================================================
         subroutine calculate_sed(k_max, par_max, model, cc, wti, sink, dcc, dcc_R, bctype_top, bctype_bottom, &
-            bc_top, bc_bottom, hz, dz, k_bbl_sed, wbio, w_b, u_b, julianday, dt, freq_sed, dynamic_w_sed, is_solid, &
+            bc_top, bc_bottom, hz, dz, k_bbl_sed, wbio, w_b, u_b, day_of_year, dt, freq_sed, dynamic_w_sed, is_solid, &
             rho, phi1, fick, k_sed1, K_O2s, kz_bio, id_O2, dphidz_SWI, cc0, bott_flux, bott_source)
     
         !Calculates vertical advection (sedimentation) in the water column and sediments
@@ -326,7 +326,7 @@
     
         !Input variables
         integer, intent(in)                         :: k_max, par_max, id_O2
-        integer, intent(in)                         :: julianday, freq_sed, k_bbl_sed, dynamic_w_sed
+        integer, intent(in)                         :: day_of_year, freq_sed, k_bbl_sed, dynamic_w_sed
         integer, dimension(:), intent(in)           :: bctype_top, bctype_bottom
         integer, dimension(:), intent(in)           :: is_solid, k_sed1
         real(rk), dimension(:,:), intent(in)        :: dcc_R, fick
@@ -523,7 +523,7 @@
     !=======================================================================================================================
         subroutine calculate_sed_eya(k_max, par_max, model, cc, wti, sink, &
             dcc, dVV, bctype_top, bctype_bottom, bc_top, bc_bottom, &
-            hz, dz, k_bbl_sed, wbio, w_b, u_b, julianday, dt, freq_sed, &
+            hz, dz, k_bbl_sed, wbio, w_b, u_b, dt, freq_sed, &
             dynamic_w_sed, constant_w_sed, is_solid, rho, phi1, fick, &
             k_sed1, K_O2s, kz_bio, id_O2, dphidz_SWI, &
             cc0, bott_flux, bott_source, w_binf, bu_co, is_gas)
@@ -533,7 +533,7 @@
         implicit none
     
         !Input variables
-        integer, intent(in)                         :: k_max, par_max, id_O2, julianday, freq_sed
+        integer, intent(in)                         :: k_max, par_max, id_O2, freq_sed
         integer, intent(in)                         :: k_bbl_sed, dynamic_w_sed, constant_w_sed
         integer, dimension(:), intent(in)           :: bctype_top, bctype_bottom
         integer, dimension(:), intent(in)           :: is_solid, is_gas, k_sed1
@@ -683,14 +683,14 @@
             
     !=======================================================================================================================
         subroutine calculate_bubble(k_max, par_max, model, cc, sink, N_bubbles, &
-            dcc, hz, dz, z, t, k_bbl_sed, julianday, dt, freq_float, is_gas, wbio, cc0, use_hice, aice)
+            dcc, hz, dz, z, t, k_bbl_sed, day_of_year, dt, freq_float, is_gas, wbio, cc0, use_hice, aice)
     
         !Calculates floating of bubbles in the water column and sediments
     
         implicit none
     
         !Input variables
-        integer, intent(in)                         :: k_max, par_max, julianday, freq_float
+        integer, intent(in)                         :: k_max, par_max, day_of_year, freq_float
         integer, intent(in)                         :: k_bbl_sed, use_hice
         integer, dimension(:), intent(in)           :: is_gas 
         real(rk), dimension(:), intent(in)          :: hz, dz, z, aice
@@ -728,13 +728,13 @@
               do k=1,k_max-1
                  
                 rb = 100._rk * &     !bubble radius in [cm] (details in brom_bubble), we convert to [m]
-                    (cc(k,ip)*0.001_rk*8.314_rk*(273.15_rk+t(k,julianday))/(101325.0_rk &
+                    (cc(k,ip)*0.001_rk*8.314_rk*(273.15_rk+t(k,day_of_year))/(101325.0_rk &
                     +z(k)*101325.0_rk/10.3_rk) &                        ! Volume of gas
                     /N_bubbles*3.0_rk/4.0_rk/3.14159_rk)**(1.0_rk/3.0_rk)
     !            if(rb.gt.0.0000001) then
     !              if (rb.lt.0.4) then
     !                wbub(k)=  -(22.16_rk+0.733_rk*(rb-0.0000000584_rk)**(-0.0849_rk)) &   ! rate of rise
-    !                         *exp(4.792e-4_rk*t(k,julianday)*(rb-0.0000000584_rk)**(-0.815_rk)) &
+    !                         *exp(4.792e-4_rk*t(k,day_of_year)*(rb-0.0000000584_rk)**(-0.815_rk)) &
     !                         /100._rk !into m/s          
     !              else
     !                wbub(k)= -19.16_rk/100._rk !into m/s
@@ -761,7 +761,7 @@
                 sink(k,ip) = -100000.0_rk*wbub(k)*cc(k,ip)/100000.0_rk                
               end do
     
-              if (use_hice.eq.1.and.aice(julianday).eq.0.0_rk)   sink(1,ip) =0.0_rk      
+              if (use_hice.eq.1.and.aice(day_of_year).eq.0.0_rk)   sink(1,ip) =0.0_rk      
         !Calculate tendencies dcc = dcc/dt = -dF/dz on layer midpoints (top/bottom not used where Dirichlet bc imposed)
               do k=1,k_max-1                 
                 dcc(k,ip) = (sink(k+1,ip)-sink(k,ip))/hz(k) !-1)

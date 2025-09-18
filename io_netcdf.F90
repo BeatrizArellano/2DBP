@@ -34,6 +34,8 @@
       public :: days_in_year, years, year_start_idx, year_last_idx, nrecs_in_year
       public init_netcdf, save_netcdf, close_netcdf
 
+      !----- For loading forcing data------------------------------------------
+
       logical, save :: forcing_init = .false.
       class(type_input), allocatable, save :: nc
 
@@ -52,19 +54,32 @@
       integer, allocatable, save :: nrecs_in_year(:)   ! number of records in each year
 
 
+      !-------------For saving data in a netcdf file
+      ! NetCDF file handle
+      integer, save :: ncid = -1
 
-      !netCDF file id
-      integer               :: nc_id
-      integer, allocatable  :: parameter_id(:)
-      integer, allocatable  :: parameter_fick_id(:)
-      integer, allocatable  :: parameter_sink_id(:)
-      integer, allocatable  :: parameter_id_diag(:)
-  
-      integer               :: i_id, z_id, z2_id, time_id, swradWm2_id, hice_id
-      integer               :: pH_id, T_id, S_id, Kz_id, Kz_sol_id, Kz_par_id, w_sol_id, w_par_id, gas_air_sea_id
-      integer               :: pCO2_id, Om_Ca_id, Om_Ar_id
-  
-      logical               :: first
+      ! Dimension IDs
+      integer, save :: dim_time = -1, dim_depth = -1, dim_depth_interface = -1
+
+      ! Coordinate variable IDs
+      integer, save :: var_time = -1, var_z = -1, var_z1 = -1
+
+      ! Physics variable IDs
+      integer, save :: var_T = -1, var_S = -1, var_Kz = -1
+      integer, save :: var_swrad = -1, var_hice = -1
+      integer, save :: var_airsea_co2 = -1   ! time-only CO2 air-sea flux
+
+      ! FABM state variables
+      integer, allocatable, save :: parameter_id(:)         ! tracer concentrations
+      integer, allocatable, save :: parameter_fick_id(:)    ! tracer-specific flux across interfaces
+      integer, allocatable, save :: parameter_sink_id(:)    ! tracer-specific sinking fluxes
+
+      ! FABM diagnostics
+      integer, allocatable, save :: parameter_id_diag(:)
+
+      ! Internal bookkeeping
+      logical, save :: nc_ready = .false.
+      integer, save :: time_index = 0
   
   
   
@@ -233,7 +248,7 @@
         implicit none
         character(*), intent(in)  :: varname
         integer,      intent(in)  :: year      ! actual year number
-        real(rk),     allocatable, intent(out) :: out(:,:)
+        real(rk),     allocatable, intent(inout) :: out(:,:)
       
         real(rk), allocatable :: full(:,:)
         integer :: k, nrec
@@ -247,20 +262,21 @@
         nrec = year_last_idx(k) - year_start_idx(k) + 1
       
         full = nc%get_array(trim(varname))
-      
+
+        if (allocated(out)) deallocate(out)
+        allocate(out(nz, nrec))
+
         if (size(full,1) == nz) then
-          ! Layout (depth, time)
-          allocate(out(nz, nrec))
+          ! Layout (depth, time)          
           out(:,:) = full(:, year_start_idx(k):year_last_idx(k))
       
         else if (size(full,2) == nz) then
           ! Layout (time, depth)
-          allocate(out(nz, nrec))
-          out(:,:) = transpose(full(year_start_idx(k):year_last_idx(k), :))
-      
+          out(:,:) = transpose(full(year_start_idx(k):year_last_idx(k), :))      
         else
           stop 'FATAL (io_netcdf): variable "'//trim(varname)//'" has unexpected shape'
         end if
+        deallocate(full)
       end subroutine load_variable_year 
 
 
@@ -279,7 +295,7 @@
         implicit none
         character(*), intent(in)  :: varname
         integer,      intent(in)  :: year      ! actual year number
-        real(rk),     allocatable, intent(out):: out(:)
+        real(rk),     allocatable, intent(inout):: out(:)
 
         real(rk), allocatable :: full(:)
         integer :: k, nrec
@@ -295,267 +311,266 @@
         full = nc%get_column(trim(varname))
 
         ! Slice to year
+        if (allocated(out)) deallocate(out)
         allocate(out(nrec))
         out(:) = full(year_start_idx(k):year_last_idx(k))
+        deallocate(full)
       end subroutine load_variable_year_1d
   
   
   
   
   !=======================================================================================================================
-      subroutine init_netcdf(fn, k_max, model, use_swradWm2, use_hice, year)
+      subroutine init_netcdf(filename, k_max, z, z1, model, use_hice, start_year)
   
-      !Input variables
-      character(len=*), intent(in)     :: fn
-      integer, intent(in)              :: k_max, use_swradWm2, use_hice, year
-      class (type_fabm_model), pointer :: model
-  
-      !Local variables
-      integer                          :: z_dim_id, z2_dim_id, time_dim_id
-      integer                          :: ip, iret, ilast
-      integer, parameter               :: time_len = NF90_UNLIMITED
-      character(len=4)                 :: yearstr
-      integer                          :: dim1d
-      integer                          :: dim_ids(2), dim_ids2(2), dim_ids0(1)
-  
-    write(*,*) "k_max = ", k_max
-  
-      first = .true.
-      print *, 'NetCDF version: ', trim(nf90_inq_libvers())
-      nc_id = -1
-      call check_err(nf90_create(fn, NF90_CLOBBER, nc_id))
-  
-      !Define the dimensions
-      call check_err(nf90_def_dim(nc_id, "z", k_max, z_dim_id))
-      call check_err(nf90_def_dim(nc_id, "z2", k_max+1, z2_dim_id))
-      call check_err(nf90_def_dim(nc_id, "time", time_len, time_dim_id))
-  
-      !Define coordinates
-      dim1d = z_dim_id
-      call check_err(nf90_def_var(nc_id, "z", NF90_REAL, dim1d, z_id))
-      call check_err(nf90_put_att(nc_id, z_id, "positive", "down"))
-      call check_err(nf90_put_att(nc_id, z_id, "long_name", "depth at layer midpoints"))
-      call check_err(nf90_put_att(nc_id, z_id, "units", "metres"))
-      call check_err(nf90_put_att(nc_id, z_id, "axis", "Z"))
-      dim1d = z2_dim_id
-      call check_err(nf90_def_var(nc_id, "z2", NF90_REAL, dim1d, z2_id))
-      call check_err(nf90_put_att(nc_id, z2_id, "positive", "down"))
-      call check_err(nf90_put_att(nc_id, z2_id, "long_name", "depth at layer interfaces"))
-      call check_err(nf90_put_att(nc_id, z2_id, "units", "metres"))
-      call check_err(nf90_put_att(nc_id, z2_id, "axis", "Z"))
-      dim1d = time_dim_id
-      call check_err(nf90_def_var(nc_id, "time", NF90_REAL, dim1d, time_id))
-      write(yearstr,'(i4)') year
-      call check_err(nf90_put_att(nc_id, time_id, "long_name", "time"))
-      call check_err(nf90_put_att(nc_id, time_id, "units", "days since "//trim(yearstr)//"-01-01 00:00:00"))
-      call check_err(nf90_put_att(nc_id, time_id, "axis", "T"))
-  
-      write(*,*) "Init params"
-      write(*,*) "z_dim_id: ", z_id
-      write(*,*) "z2_dim_id: ", z2_dim_id
-  
-      !Define state variables
-      dim_ids = (/z_dim_id, time_dim_id/)
-      dim_ids2 = (/z2_dim_id, time_dim_id/)
-      dim_ids0 = (/time_dim_id/)
-      allocate(parameter_id(size(model%interior_state_variables)))
-      allocate(parameter_fick_id(size(model%interior_state_variables)))
-      allocate(parameter_sink_id(size(model%interior_state_variables)))
-      do ip=1,size(model%interior_state_variables)
-          ilast = index(model%interior_state_variables(ip)%path,'/',.true.)
-          call check_err(nf90_def_var(nc_id, model%interior_state_variables(ip)%path(ilast+1:), NF90_REAL, dim_ids, parameter_id(ip)))  ! was ilast+1:
-          call check_err(nf90_def_var(nc_id, 'fick:'//model%interior_state_variables(ip)%path(ilast+1:), NF90_REAL, dim_ids2, parameter_fick_id(ip)))
-          call check_err(nf90_def_var(nc_id, 'sink:'//model%interior_state_variables(ip)%path(ilast+1:), NF90_REAL, dim_ids2, parameter_sink_id(ip)))
-          call check_err(set_attributes(ncid=nc_id, id=parameter_id(ip), units=model%interior_state_variables(ip)%units, &
-              long_name=model%interior_state_variables(ip)%long_name, missing_value=model%interior_state_variables(ip)%missing_value))
-          call check_err(set_attributes(ncid=nc_id, id=parameter_fick_id(ip), units='mmol/m^2/day', &
-              long_name='fick:'//model%interior_state_variables(ip)%long_name,missing_value=model%interior_state_variables(ip)%missing_value))
-          call check_err(set_attributes(ncid=nc_id, id=parameter_sink_id(ip), units='mmol/m^2/day', &
-              long_name='sink:'//model%interior_state_variables(ip)%long_name,missing_value=model%interior_state_variables(ip)%missing_value))
-          call check_err(nf90_put_att(nc_id, parameter_fick_id(ip), "positive", "down"))
-          call check_err(nf90_put_att(nc_id, parameter_sink_id(ip), "positive", "down"))
-      end do
-  
-      !Define diagnostic variables
-      allocate(parameter_id_diag(size(model%interior_diagnostic_variables)))
-      !do ip=1,size(model%interior_diagnostic_variables)
-      !    write(*,*) model%interior_diagnostic_variables(ip)%name
-      !enddo
-      do ip=1,size(model%interior_diagnostic_variables)
-          if (model%interior_diagnostic_variables(ip)%save) then
-              ilast = index(model%interior_diagnostic_variables(ip)%path,'/',.true.)
-              call check_err(nf90_def_var(nc_id, model%interior_diagnostic_variables(ip)%path(ilast+1:), NF90_REAL, dim_ids, parameter_id_diag(ip)))
-              call check_err(set_attributes(ncid=nc_id, id=parameter_id_diag(ip), units=model%interior_diagnostic_variables(ip)%units, &
-                  long_name=model%interior_diagnostic_variables(ip)%long_name,missing_value=model%interior_diagnostic_variables(ip)%missing_value))
+        !Input variables
+        character(*), intent(in) :: filename
+        integer,      intent(in) :: k_max, use_hice, start_year
+        real(rk),     intent(in) :: z(:), z1(:)
+        class(type_fabm_model), pointer, intent(in) :: model
+
+        integer :: ntr, ndiag, i, ilast
+        character(len=128) :: vname
+        character(len=16)  :: yearstr
+
+        print *, 'Initialising NetCDF version: ', trim(nf90_inq_libvers())
+        write(yearstr,'(I4)') start_year
+
+        ! Create file
+        call check_err(nf90_create(trim(filename), nf90_clobber, ncid), "creating file")
+
+        ! Dimensions
+        call check_err(nf90_def_dim(ncid, "time", nf90_unlimited, dim_time), "defining time dimension")
+        call check_err(nf90_def_dim(ncid, "depth", k_max, dim_depth), "defining depth dimension")
+        call check_err(nf90_def_dim(ncid, "depth_interface", k_max+1, dim_depth_interface), "defining depth_interface dimension")
+
+        ! Coordinates
+        call check_err(nf90_def_var(ncid, "time", nf90_double, (/dim_time/), var_time), "defining time variable")
+        call check_err(nf90_put_att(ncid, var_time, "units", "days since "//trim(yearstr)//"-01-01 00:00:00"))
+        call check_err(nf90_put_att(ncid, var_time, "standard_name", "time"))
+        call check_err(nf90_put_att(ncid, var_time, "long_name", "time"))
+        call check_err(nf90_put_att(ncid, var_time, "axis", "T"))
+
+        call check_err(nf90_def_var(ncid, "depth", nf90_double, (/dim_depth/), var_z), "defining depth variable")
+        call check_err(nf90_put_att(ncid, var_z, "units", "m"))
+        call check_err(nf90_put_att(ncid, var_z, "positive", "down"))
+        call check_err(nf90_put_att(ncid, var_z, "long_name", "depth"))
+        call check_err(nf90_put_att(ncid, var_z, "axis", "Z"))
+
+        call check_err(nf90_def_var(ncid, "depth_interface", nf90_double, (/dim_depth_interface/), var_z1), "defining depth_interface variable")
+        call check_err(nf90_put_att(ncid, var_z1, "units", "m"))
+        call check_err(nf90_put_att(ncid, var_z1, "positive", "down"))
+        call check_err(nf90_put_att(ncid, var_z1, "long_name", "depth at interfaces"))
+
+        ! Physics variables
+        call check_err(nf90_def_var(ncid, "temperature", nf90_double, (/dim_depth, dim_time/), var_T), "defining temperature")
+        call check_err(nf90_put_att(ncid, var_T, "units", "degree_Celsius"))
+        call check_err(nf90_put_att(ncid, var_T, "long_name", "sea water potential temperature"))
+
+        call check_err(nf90_def_var(ncid, "salinity", nf90_double, (/dim_depth, dim_time/), var_S), "defining salinity")
+        !call check_err(nf90_put_att(ncid, var_S, "units", "1e-3"))
+        call check_err(nf90_put_att(ncid, var_S, "long_name", "sea water salinity"))
+
+        call check_err(nf90_def_var(ncid, "Kz", nf90_double, (/dim_depth, dim_time/), var_Kz), "defining Kz")
+        call check_err(nf90_put_att(ncid, var_Kz, "units", "m2 s-1"))
+        call check_err(nf90_put_att(ncid, var_Kz, "long_name", "vertical eddy diffusivity"))
+
+        call check_err(nf90_def_var(ncid, "swrad", nf90_double, (/dim_time/), var_swrad), "defining swrad")
+        call check_err(nf90_put_att(ncid, var_swrad, "units", "W m-2"))
+        call check_err(nf90_put_att(ncid, var_swrad, "long_name", "surface downward shortwave radiation"))
+
+        if (use_hice /= 0) then
+          call check_err(nf90_def_var(ncid, "hice", nf90_double, (/dim_time/), var_hice), "defining hice")
+          call check_err(nf90_put_att(ncid, var_hice, "units", "m"))
+          call check_err(nf90_put_att(ncid, var_hice, "long_name", "sea ice thickness"))
+        end if
+
+        ! Scalars
+        call check_err(nf90_def_var(ncid, "air_sea_flux_CO2", nf90_double, (/dim_time/), var_airsea_co2), "defining air_sea_flux")
+        call check_err(nf90_put_att(ncid, var_airsea_co2, "units", "mol m-2 d-1"))
+        call check_err(nf90_put_att(ncid, var_airsea_co2, "long_name", "air-sea flux of CO2"))
+
+        ! FABM tracers
+        ntr = size(model%interior_state_variables)
+        allocate(parameter_id(ntr), parameter_fick_id(ntr), parameter_sink_id(ntr))
+        do i = 1, ntr
+          vname = model%interior_state_variables(i)%path
+          ilast = index(vname, '/', .true.)
+          if (ilast > 0) vname = vname(ilast+1:)
+
+          ! main tracer concentration
+          call check_err(nf90_def_var(ncid, trim(vname), nf90_double, (/dim_depth, dim_time/), parameter_id(i)), "defining tracer "//trim(vname))
+          if (len_trim(model%interior_state_variables(i)%units) > 0) &
+              call check_err(nf90_put_att(ncid, parameter_id(i), "units", trim(model%interior_state_variables(i)%units)))
+          call check_err(nf90_put_att(ncid, parameter_id(i), "long_name", trim(vname)))
+          
+          ! interface fluxes
+          call check_err(nf90_def_var(ncid, "fick_"//trim(vname), nf90_double, (/dim_depth_interface, dim_time/), parameter_fick_id(i)), "defining fick_"//trim(vname))
+          call check_err(nf90_put_att(ncid, parameter_fick_id(i), "units", "mol m-2 d-1"))
+
+          call check_err(nf90_def_var(ncid, "sink_"//trim(vname), nf90_double, (/dim_depth_interface, dim_time/), parameter_sink_id(i)), "defining sink_"//trim(vname))
+          call check_err(nf90_put_att(ncid, parameter_sink_id(i), "units", "mol m-2 d-1"))
+        end do
+
+        ! FABM diagnostics
+        ndiag = size(model%interior_diagnostic_variables)
+        allocate(parameter_id_diag(ndiag))
+        do i = 1, ndiag
+          if (model%interior_diagnostic_variables(i)%save) then
+              vname = model%interior_diagnostic_variables(i)%path
+              ilast = index(vname, '/', .true.)
+              if (ilast > 0) vname = vname(ilast+1:)
+
+              call check_err(nf90_def_var(ncid, trim(vname), nf90_double, (/dim_depth, dim_time/), parameter_id_diag(i)), "defining diagnostic "//trim(vname))
+              if (len_trim(model%interior_diagnostic_variables(i)%units) > 0) &
+                call check_err(nf90_put_att(ncid, parameter_id_diag(i), "units", trim(model%interior_diagnostic_variables(i)%units)))
+              call check_err(nf90_put_att(ncid, parameter_id_diag(i), "long_name", trim(vname)))
+          else
+              parameter_id_diag(i) = -1
           end if
-      end do
-  
-      !Define forcing variables used in the run
-      call check_err(nf90_def_var(nc_id, "T", NF90_REAL, dim_ids, T_id))
-      call check_err(nf90_put_att(nc_id, T_id, "long_name", "temperature"))
-      call check_err(nf90_put_att(nc_id, T_id, "units", "degC"))
-      call check_err(nf90_def_var(nc_id, "S", NF90_REAL, dim_ids, S_id))
-      call check_err(nf90_put_att(nc_id, S_id, "long_name", "salinity"))
-      call check_err(nf90_def_var(nc_id, "Kz", NF90_REAL, dim_ids2, Kz_id))
-      call check_err(nf90_put_att(nc_id, Kz_id, "long_name", "vertical eddy diffusivity"))
-      call check_err(nf90_put_att(nc_id, Kz_id, "units", "m2/s"))
-      call check_err(nf90_def_var(nc_id, "Kz_sol", NF90_REAL, dim_ids2, Kz_sol_id))
-      call check_err(nf90_put_att(nc_id, Kz_sol_id, "long_name", "total vertical diffusivity of a solute"))
-      call check_err(nf90_put_att(nc_id, Kz_sol_id, "units", "m2/s"))
-      call check_err(nf90_def_var(nc_id, "Kz_par", NF90_REAL, dim_ids2, Kz_par_id))
-      call check_err(nf90_put_att(nc_id, Kz_par_id, "long_name", "total vertical diffusivity of a particulate"))
-      call check_err(nf90_put_att(nc_id, Kz_par_id, "units", "m2/s"))
-      call check_err(nf90_def_var(nc_id, "w_sol", NF90_REAL, dim_ids2, w_sol_id))
-      call check_err(nf90_put_att(nc_id, w_sol_id, "long_name", "total advective velocity of a solute"))
-      call check_err(nf90_put_att(nc_id, w_sol_id, "units", "m/s"))
-      call check_err(nf90_def_var(nc_id, "w_par", NF90_REAL, dim_ids2, w_par_id))
-      call check_err(nf90_put_att(nc_id, w_par_id, "long_name", "total advective velocity of a particulate"))
-      call check_err(nf90_put_att(nc_id, w_par_id, "units", "m/s"))
-      call check_err(nf90_def_var(nc_id, "gas_air_sea", NF90_REAL, dim_ids, gas_air_sea_id))  ! DIC air-sea flux
-      call check_err(nf90_put_att(nc_id, gas_air_sea_id, "long_name", "gas_air_sea"))
-      call check_err(nf90_put_att(nc_id, gas_air_sea_id, "units", "mmol/m2/d"))
-      if (use_swradWm2.eq.1) then
-          call check_err(nf90_def_var(nc_id, "swradWm2", NF90_REAL, time_dim_id, swradWm2_id))
-          call check_err(nf90_put_att(nc_id, swradWm2_id, "units", "W/m2"))
-      end if
-      if (use_hice.eq.1) then
-          call check_err(nf90_def_var(nc_id, "hice", NF90_REAL, time_dim_id, hice_id))
-          call check_err(nf90_put_att(nc_id, hice_id, "units", "m"))
-      end if
-  
-      call check_err(nf90_enddef(nc_id))
+        end do
+
+        call check_err(nf90_enddef(ncid), "ending NetCDF definition")
+
+        ! Write depth coordinates once
+        call check_err(nf90_put_var(ncid, var_z,  z), "writing depth")
+        call check_err(nf90_put_var(ncid, var_z1, z1), "writing depth_interface")
+
+        ! Init counters
+        time_index = 0
+        nc_ready   = .true.
+
   
       end subroutine init_netcdf
   !=======================================================================================================================
   
-  
-  
-  
+    
   
   
   
   !=======================================================================================================================
-      subroutine save_netcdf(k_max, julianday, cc, t, s, kz, kzti, wti, &
-          model, z, hz, swradWm2, use_swradWm2, hice, use_hice, fick_per_day, sink_per_day, &
-          ip_sol, ip_par, i_day, id, idt, output_step, input_step, gas_air_sea, multiyears_physics ) !i_sec_pr) ! i_day here = i_day + 1
+      subroutine save_netcdf(k_max, cc, t, s, kz, &
+                             model, swradWm2,use_hice, hice, &
+                             fick_per_day, sink_per_day, air_sea_flux_co2, &
+                             time_output)
   
-      !Input variables
-      integer, intent(in)                    :: k_max, julianday, use_swradWm2, input_step
-      integer, intent(in)                    :: use_hice, ip_sol, ip_par, i_day, id, idt, output_step, multiyears_physics
-      real(rk), dimension(:,:), intent(in)   :: cc, t, s, kz, kzti, wti, fick_per_day, sink_per_day, gas_air_sea
-      class (type_fabm_model), pointer :: model
-      real(rk), dimension(:), intent(in)     :: z, hz, swradWm2, hice
-  
-      !Local variables
-      integer, dimension(1)                  :: start_z, count_z, start_z2, count_z2, start_time, count_time, start_x, count_x
-      integer, dimension(2)                  :: start_cc, count_cc, start_flux, count_flux
-      real(rk)                               :: temp_matrix(k_max), dum(1), z2(k_max+1), day_part
-      !Note: The input arguments to nf90_put_var MUST be vectors, even if the length is 1
-      !      Removing the dimension(1) or (1) from dum above triggers a spurious error "not finding nf90_put_var"
-      integer                                :: ip, i, i_sec, istep_out, i_day_share
-        !integer,parameter         :: timestepkind = selected_int_kind(12)   !how to make int(8)
-        !integer(kind=timestepkind):: i_sec  !declared as int(8) it will not work with netcdf functions 
-  !    day_part=real(id)/real(idt)
-  !    i_sec=((i_day-1)*86400 + int((86400*(id/100))/(idt/100)))/output_step ! as in Horten
-  !    istep_out = int((julianday)*86400/input_step)
-  
-      day_part=real(id)/real(idt)
-      i_day_share = 86400/output_step  !a multipier allowing to decrease max int number in i_sec
-!      i_sec=int(((i_day-1)*86400 + int(86400*id/idt))/output_step) ! time count for saving  (in array numbers)
-      i_sec=int(((i_day-1)*i_day_share + int(i_day_share*id/idt))) ! time count for saving  (in array numbers)      
-      istep_out = max(1, int(((julianday-1)*86400 + int(86400*id/idt))/input_step)) ! time count to select data from arrays, i.e. temp, salt
-  
-   !Define nf90_put_var arguments "start" and "count" for z, z2, time, (cc,t,s) and (fick,kz)
-      start_z = 1
-      count_z = k_max
-      start_z2 = 1
-      count_z2 = k_max+1
-      start_time = i_sec
-      count_time = 1
-      start_cc = (/1, i_sec/) ! i_sec
-      count_cc = (/k_max, 1/)
-      start_flux = (/1, i_sec/) ! i_sec
-      count_flux = (/k_max+1, 1/)
-      !At first call only, output depth variable mz = -1*z
-      if (first) then
-          call check_err(nf90_put_var(nc_id, z_id, z, start_z, count_z))
-          z2(1:k_max) = z(1:k_max) - 0.5_rk*hz(1:k_max)
-          z2(k_max+1) = z(k_max) + 0.5_rk*hz(k_max)
-          call check_err(nf90_put_var(nc_id, z2_id, z2, start_z2, count_z2))
-          !Note: nc_id, z_id and z2_id are available to the entire module and defined in init_netcdf
-          first = .false.
-      end if
-      dum(1) = (real(i_day)+day_part)
-      !For all calls output cc, fick, diagnostics and forcings (t,s,kz)
-      if (nc_id.ne.-1) then
-          call check_err(nf90_put_var(nc_id, time_id, dum, start_time, count_time))
-          do ip=1,size(model%interior_state_variables)
-              call check_err(nf90_put_var(nc_id, parameter_id(ip), cc(:,ip), start_cc, count_cc))
-              call check_err(nf90_put_var(nc_id, gas_air_sea_id, gas_air_sea(:,ip), start_cc, count_cc))
-              call check_err(nf90_put_var(nc_id, parameter_fick_id(ip), fick_per_day(:,ip), start_flux, count_flux))
-              call check_err(nf90_put_var(nc_id, parameter_sink_id(ip), sink_per_day(:,ip), start_flux, count_flux))
-          end do
-          do ip=1,size(model%interior_diagnostic_variables)
-              if (model%interior_diagnostic_variables(ip)%save) then
-                  temp_matrix = model%get_interior_diagnostic_data(ip)
-                  if (maxval(abs(temp_matrix)).lt.1.0E37) then
-                      !This is to avoid "NetCDF numeric conversion error" for some NetCDF configurations
-                      call check_err(nf90_put_var(nc_id, parameter_id_diag(ip), temp_matrix, start_cc, count_cc))
-                  end if
-              end if
-          end do
-          if(multiyears_physics.gt.0) then
-            call check_err(nf90_put_var(nc_id, T_id, t(:,i_sec), start_cc, count_cc))
-            call check_err(nf90_put_var(nc_id, S_id, s(:,i_sec), start_cc, count_cc))
-            call check_err(nf90_put_var(nc_id, Kz_id, kz(:,i_sec), start_flux, count_flux))
-          else
-            call check_err(nf90_put_var(nc_id, T_id, t(:,istep_out), start_cc, count_cc))
-            call check_err(nf90_put_var(nc_id, S_id, s(:,istep_out), start_cc, count_cc))
-            call check_err(nf90_put_var(nc_id, Kz_id, kz(:,istep_out), start_flux, count_flux))
-          endif
+        ! Arguments
+        integer, intent(in)                  :: k_max, use_hice
+        real(rk), intent(in)                 :: time_output        ! time in days since start
+        real(rk), dimension(:,:), intent(in) :: cc              ! tracer concentrations (depth x tracer)        
+        real(rk), dimension(:,:), intent(in) :: fick_per_day    ! fluxes across interfaces (depth+1 x tracer)
+        real(rk), dimension(:,:), intent(in) :: sink_per_day    ! sinking fluxes across interfaces (depth+1 x tracer)
+        real(rk), dimension(:),   intent(in) :: t, s, kz        ! physical profiles
+        class(type_fabm_model), pointer      :: model
+        real(rk), intent(in)                 :: swradWm2, hice  ! surface forcing scalars
+        real(rk), intent(in) :: air_sea_flux_co2                ! air-sea flux of CO2
+                            
+        ! Locals
+        integer :: ip
+        real(rk), allocatable :: diag(:)
+        real(rk) :: tmp(1)    ! buffer for scalar writes (NetCDF requires rank-1 array, not bare scalar)
+                            
+        if (.not. nc_ready) stop "FATAL: save_netcdf called before init_netcdf"
+      
+        ! Increment time record counter
+        time_index = time_index + 1
+      
+        !------------------------------------------------------------
+        ! Write time coordinate
+        ! Note: tmp(1) is used because nf90_put_var expects a vector,
+        ! even for length-1 writes.
+        !------------------------------------------------------------
+        tmp(1) = time_output
+        call check_err(nf90_put_var(ncid, var_time, tmp, start=(/time_index/), count=(/1/)), "writing time")
+      
+        !------------------------------------------------------------
+        ! Write physics profiles (depth-resolved)
+        !------------------------------------------------------------
+        call put_column(var_T,   t, "temperature")
+        call put_column(var_S,   s, "salinity")
+        call put_column(var_Kz,  kz, "Kz")
+      
+        !------------------------------------------------------------
+        ! Write scalar forcings
+        !------------------------------------------------------------      
+        if (use_hice == 1) then
+           tmp(1) = hice
+           call check_err(nf90_put_var(ncid, var_hice, tmp, start=(/time_index/), count=(/1/)), "writing hice")
+        end if
+      
+        tmp(1) = swradWm2
+        call check_err(nf90_put_var(ncid, var_swrad, tmp, start=(/time_index/), count=(/1/)), "writing swrad")
 
-  
-          call check_err(nf90_put_var(nc_id, Kz_sol_id, kzti(:,ip_sol), start_flux, count_flux))
-          call check_err(nf90_put_var(nc_id, Kz_par_id, kzti(:,ip_par), start_flux, count_flux))
-          call check_err(nf90_put_var(nc_id, w_sol_id, wti(:,ip_sol), start_flux, count_flux))
-          call check_err(nf90_put_var(nc_id, w_par_id, wti(:,ip_par), start_flux, count_flux))
-  
-          if (use_swradWm2.eq.1) then
-              dum(1) = swradWm2(i_day) !julianday
-              call check_err(nf90_put_var(nc_id, swradWm2_id, dum, start_time, count_time))
-          end if
-  
-          if (use_hice.eq.1) then
-              dum(1) = hice(i_day) !julianday
-              call check_err(nf90_put_var(nc_id, hice_id, dum, start_time, count_time))
-          end if
-          call check_err(nf90_sync(nc_id))
-      end if
+        !------------------------------------------------------------
+        ! Write air-sea flux of CO2
+        !------------------------------------------------------------
+        tmp(1) = air_sea_flux_co2
+        call check_err(nf90_put_var(ncid, var_airsea_co2, tmp, start=(/time_index/), count=(/1/)), "writing air_sea_flux_CO2")
+
+
+      
+        !------------------------------------------------------------
+        ! Write tracer concentrations and fluxes
+        !------------------------------------------------------------
+        do ip = 1, size(model%interior_state_variables)
+           call check_err(nf90_put_var(ncid, parameter_id(ip), cc(:,ip), start=(/1,time_index/), count=(/k_max,1/)), "writing tracer "//trim(model%interior_state_variables(ip)%name))
+           call check_err(nf90_put_var(ncid, parameter_fick_id(ip), fick_per_day(:,ip), start=(/1,time_index/), count=(/k_max+1,1/)), "writing fick "//trim(model%interior_state_variables(ip)%name))
+           call check_err(nf90_put_var(ncid, parameter_sink_id(ip), sink_per_day(:,ip), start=(/1,time_index/), count=(/k_max+1,1/)), "writing sink "//trim(model%interior_state_variables(ip)%name))
+        end do
+      
+        !------------------------------------------------------------
+        ! Write diagnostics (only those flagged with %save)
+        !------------------------------------------------------------
+        do ip = 1, size(model%interior_diagnostic_variables)
+           if (model%interior_diagnostic_variables(ip)%save) then
+              diag = model%get_interior_diagnostic_data(ip)
+              ! Guard against extreme values that NetCDF cannot handle
+              if (maxval(abs(diag)) < 1.0e37_rk) then
+                 call check_err(nf90_put_var(ncid, parameter_id_diag(ip), diag, start=(/1,time_index/), count=(/size(diag),1/)), "writing diagnostic "//trim(model%interior_diagnostic_variables(ip)%name))
+              end if
+           end if
+        end do
+      
+        !------------------------------------------------------------
+        ! Flush buffers to disk (safer for long runs, avoids data loss if crash)
+        !------------------------------------------------------------
+        call check_err(nf90_sync(ncid), "syncing NetCDF")
+        
+        contains
+          !------------------------------------------------------------
+          ! Function to write a depth profile (vector) for this timestep
+          !------------------------------------------------------------
+          subroutine put_column(varid, arr, label)
+            integer, intent(in) :: varid
+            real(rk), intent(in) :: arr(:)
+            character(*), intent(in) :: label
+            integer :: st_local
+            st_local = nf90_put_var(ncid, varid, arr, start=(/1,time_index/), count=(/size(arr),1/))
+            call check_err(st_local, "writing "//trim(label))
+          end subroutine put_column
   
       end subroutine save_netcdf
-  !=======================================================================================================================
-  
-  
-  
-  
-  
+  !======================================================================================================================= 
+   
   
   
   
   !=======================================================================================================================
       subroutine close_netcdf()
-  
-      implicit none
-      if (nc_id.ne.-1) then
-          call check_err(nf90_close(nc_id))
-          deallocate(parameter_id)
-          deallocate(parameter_fick_id)
-          deallocate(parameter_sink_id)
-          deallocate(parameter_id_diag)
-          write (*,'(a)') "finished"
-      end if
-      nc_id = -1
-  
+        use netcdf
+        implicit none
+        if (nc_ready) then
+           call check_err(nf90_close(ncid), "closing NetCDF file")
+      
+           if (allocated(parameter_id))       deallocate(parameter_id)
+           if (allocated(parameter_fick_id))  deallocate(parameter_fick_id)
+           if (allocated(parameter_sink_id))  deallocate(parameter_sink_id)
+           if (allocated(parameter_id_diag))  deallocate(parameter_id_diag)
+      
+           nc_ready = .false.
+           ncid     = -1
+           write(*,'(a)') "NetCDF file closed successfully"
+        end if
       end subroutine close_netcdf
   !=======================================================================================================================
   
@@ -613,125 +628,21 @@
       isleap = (mod(y,4)==0 .and. (mod(y,100)/=0 .or. mod(y,400)==0))
     end function
 
-
-
-
-
-
-
-
-
-
-
-      integer function set_attributes(ncid,id,                         &
-                                      units,long_name,                 &
-                                      valid_min,valid_max,valid_range, &
-                                      scale_factor,add_offset,         &
-                                      FillValue,missing_value,         &
-                                      C_format,FORTRAN_format)
-      !
-      ! !DESCRIPTION:
-      !  This routine is used to set a number of attributes for
-      !  variables. The routine makes heavy use of the {\tt optional} keyword.
-      !  The list of recognized keywords is very easy to extend. We have
-      !  included a sub-set of the COARDS conventions.
-      !
-      ! !USES:
-      !  IMPLICIT NONE
-      !
-      ! !INPUT PARAMETERS:
-      integer, intent(in)                     :: ncid,id
-      character(len=*), optional              :: units,long_name
-      real, optional                          :: valid_min,valid_max
-      real, optional                          :: valid_range(2)
-      real, optional                          :: scale_factor,add_offset
-      double precision, optional              :: FillValue,missing_value
-      character(len=*), optional              :: C_format,FORTRAN_format
-      !
-      ! !REVISION HISTORY:
-      !  Original author(s): Karsten Bolding & Hans Burchard
-      !
-      ! !LOCAL VARIABLES:
-      integer                                 :: iret
-      real                                    :: vals(2)
-      !
-      !
-      !-----------------------------------------------------------------------
-      !
-      if (present(units)) then
-          iret = nf90_put_att(ncid,id,'units',trim(units))
-      end if
-  
-      if (present(long_name)) then
-          iret = nf90_put_att(ncid,id,'long_name',trim(long_name))
-      end if
-  
-      if (present(C_format)) then
-          iret = nf90_put_att(ncid,id,'C_format',trim(C_format))
-      end if
-  
-      if (present(FORTRAN_format)) then
-          iret = nf90_put_att(ncid,id,'FORTRAN_format',trim(FORTRAN_format))
-      end if
-  
-      if (present(valid_min)) then
-          vals(1) = valid_min
-          iret = nf90_put_att(ncid,id,'valid_min',vals(1:1))
-      end if
-  
-      if (present(valid_max)) then
-          vals(1) = valid_max
-          iret = nf90_put_att(ncid,id,'valid_max',vals(1:1))
-      end if
-  
-      if (present(valid_range)) then
-          vals(1) = valid_range(1)
-          vals(2) = valid_range(2)
-          iret = nf90_put_att(ncid,id,'valid_range',vals(1:2))
-      end if
-  
-      if (present(scale_factor)) then
-          vals(1) = scale_factor
-          iret = nf90_put_att(ncid,id,'scale_factor',vals(1:1))
-      end if
-  
-      if (present(add_offset)) then
-          vals(1) = add_offset
-          iret = nf90_put_att(ncid,id,'add_offset',vals(1:1))
-      end if
-  
-      if (present(FillValue)) then
-          vals(1) = FillValue
-          iret = nf90_put_att(ncid,id,'_FillValue',vals(1:1))
-      end if
-  
-      if (present(missing_value)) then
-          vals(1) = missing_value
-          iret = nf90_put_att(ncid,id,'missing_value',vals(1:1))
-      end if
-  
-      set_attributes = 0
-  
-      return
-  
-      end function set_attributes
   !=======================================================================================================================
   
   
   
-  
-  
-  
+    
   !=======================================================================================================================
-      subroutine check_err(status)
-  
-      integer, intent (in) :: status
-  
-      if (status .ne. NF90_NOERR) then
-          print *, trim(nf90_strerror(status))
-          stop
-      endif
-  
+      subroutine check_err(status, msg)
+        integer, intent(in) :: status
+        character(*), intent(in), optional :: msg
+      
+        if (status /= NF90_NOERR) then
+           print *, "NetCDF error: ", trim(nf90_strerror(status))
+           if (present(msg)) print *, "  while: ", trim(msg)
+           stop "Stopped due to NetCDF error"
+        end if
       end subroutine check_err
   !=======================================================================================================================
   
