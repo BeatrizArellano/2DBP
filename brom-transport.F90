@@ -152,7 +152,6 @@
             freq_sed  = get_brom_par("freq_sed ")   
 
             water_layer_thickness = get_brom_par("water_layer_thickness")
-            k_min = get_brom_par("k_min")
             k_storm = get_brom_par("k_storm")
             hz_sed_min = get_brom_par("hz_sed_min")
             k_points_below_water = get_brom_par("k_points_below_water")
@@ -213,7 +212,7 @@
             mult_Kz = get_brom_par("mult_Kz")
             Kz_storm = get_brom_par("Kz_storm")
 
-
+            k_min = 1
             !Initialize FABM model from fabm.yaml
             model => fabm_create_omp_model()
             par_max = size(model%interior_state_variables)
