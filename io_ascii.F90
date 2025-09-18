@@ -700,17 +700,17 @@
         !!     the bottom water-column value to zero at the sediment–water
         !!     interface (SWI), with a cutoff thickness `dbl_thickness`.
         subroutine build_year_forcing(k_max, k_wat_bbl, k_bbl_sed, &
-                                      z1, z_bbl_sed, dbl_thickness, &
-                                      t_w, s_w, kz_w, t, s, kz)
+                                        z, z1, z_bbl_sed, dbl_thickness, &
+                                        t_w, s_w, kz_w, t, s, kz)
 
             implicit none
             ! Arguments
             integer, intent(in)                   :: k_max, k_wat_bbl, k_bbl_sed
             real(rk), intent(in)                  :: dbl_thickness
-            real(rk), dimension(:,:), intent(in)  :: t_w, s_w, kz_w   ! forcing arrays from file
-            real(rk), dimension(:), intent(in)    :: z1               ! interface depths
+            real(rk), dimension(:,:), intent(in)  :: t_w, s_w, kz_w   ! forcing arrays (midpoints)
+            real(rk), dimension(:), intent(in)    :: z, z1            ! z=midpoints, z1=interfaces
             real(rk), intent(in)                  :: z_bbl_sed
-            real(rk), dimension(:,:), allocatable, intent(out) :: t, s, kz  ! full model arrays
+            real(rk), dimension(:,:), allocatable, intent(out) :: t, s, kz  ! t,s(midpoints), kz(interfaces)
 
             ! Locals
             real(rk) :: kz_gr, bbl_thickness
@@ -726,39 +726,58 @@
 
             allocate(t(k_max, nsteps))
             allocate(s(k_max, nsteps))
-            allocate(kz(k_max, nsteps))
+            allocate(kz(k_max+1, nsteps))   ! NOTE: interfaces => k_max+1
 
             !---------------------------------------------------------
             ! Assign forcing to full vertical grid
             !---------------------------------------------------------
 
             ! Copy water-column values directly for all timesteps
-            t(1:k_wat_bbl, :) = t_w(1:k_wat_bbl, :)
-            s(1:k_wat_bbl, :) = s_w(1:k_wat_bbl, :)
-            kz(1:k_wat_bbl,:) = kz_w(1:k_wat_bbl,:)
+            t(1:k_wat_bbl,:) = t_w(1:k_wat_bbl,:)
+            s(1:k_wat_bbl,:) = s_w(1:k_wat_bbl,:)
 
-            ! Extend values below water column assuming the bottom value is constant in BBL and sediments
-            s(k_wat_bbl:k_max,:) = spread(s_w(k_wat_bbl-1,:), dim=1, ncopies=k_max-k_wat_bbl+1)
-            t(k_wat_bbl:k_max,:) = spread(t_w(k_wat_bbl-1,:), dim=1, ncopies=k_max-k_wat_bbl+1)
-            !s(k_wat_bbl:k_max,:) = s_w(k_wat_bbl-1,:)
-            !t(k_wat_bbl:k_max,:) = t_w(k_wat_bbl-1,:)
-            
-            ! Initialize kz below water column as zero
-            kz(k_wat_bbl+1:k_max,:) = 0.0_rk
-            ! Dynamic BBL diffusivity (decreases linearly from bottom water-column value to zero at SWI)
-            bbl_thickness = z_bbl_sed - dbl_thickness - z1(k_wat_bbl)
+            ! Extend T, S below water column: constant in BBL + sediments
+            t(k_wat_bbl:k_max,:) = spread(t_w(k_wat_bbl,:), dim=1, ncopies=k_max-k_wat_bbl+1)
+            s(k_wat_bbl:k_max,:) = spread(s_w(k_wat_bbl,:), dim=1, ncopies=k_max-k_wat_bbl+1)
+
+            !---------------------------------------------------------
+            ! Interpolate Kz from midpoints (z) -> interfaces (z1)
+            !---------------------------------------------------------
+            do tstep=1,nsteps
+                ! Top interface: copy surface value
+                kz(1,tstep) = kz_w(1,tstep)
+
+                ! Interior water-column interfaces
+                do k=2,k_wat_bbl
+                    kz(k,tstep) = kz_w(k-1,tstep) + &
+                    (kz_w(k,tstep) - kz_w(k-1,tstep)) * (z1(k)-z(k-1)) / (z(k)-z(k-1))
+                end do
+
+                ! Bottom interface of water column: copy from last midpoint
+                kz(k_wat_bbl+1,tstep) = kz_w(k_wat_bbl,tstep)
+            end do
+
+            !---------------------------------------------------------
+            ! Extend Kz into BBL (linearly decreasing to zero at SWI)
+            !---------------------------------------------------------
+            bbl_thickness = z_bbl_sed - dbl_thickness - z1(k_wat_bbl+1)
             if (abs(bbl_thickness) > 1.0e-12_rk) then
                 do tstep=1,nsteps
-                    kz_gr = (0.0_rk - kz(k_wat_bbl,tstep)) / bbl_thickness
-                    do k=k_wat_bbl+1,k_bbl_sed
-                        kz(k,tstep) = max(0.0_rk, kz(k_wat_bbl,tstep) + kz_gr*(z1(k)-z1(k_wat_bbl)))
+                    kz_gr = -kz(k_wat_bbl+1,tstep) / bbl_thickness
+                    do k=k_wat_bbl+2,k_bbl_sed
+                        kz(k,tstep) = max(0.0_rk, kz(k_wat_bbl+1,tstep) + &
+                                        kz_gr*(z1(k)-z1(k_wat_bbl+1)))
                     end do
                 end do
             else
                 write(*,*) 'WARNING: build_year_forcing - BBL thickness nearly zero, skipping dynamic BBL kz gradient.'
             end if
 
+            ! Zero diffusivity below BBL
+            kz(k_bbl_sed+1:k_max+1,:) = 0.0_rk
+
         end subroutine build_year_forcing
+
 
     !=======================================================================================================================
     
