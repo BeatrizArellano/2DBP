@@ -58,7 +58,7 @@
         integer   :: start_year, first_day, last_day, repeat_forcing_year  !time related ! 
         integer   :: year_index, calendar_year, days_in_yr
         integer   :: freq_turb, freq_sed  !time related ! ?? freq_sed, freq_turb
-        integer   :: i_day, sim_day, input_step, output_step ! 
+        integer   :: i_day, sim_day, output_step ! 
     
         character(len=64) :: icfile_name, outfile_name, ncoutfile_name
         character :: hmix_file
@@ -158,7 +158,6 @@
             area_col = get_brom_par("area_col")   
         
             ! for free length output (assumed to be a day fraction)
-            input_step = get_brom_par("input_step")
             output_step = get_brom_par("output_step")
         
             bio_model = get_brom_par("bio_model")
