@@ -648,7 +648,9 @@
             dz(k-1) = 0.5 * (hz(k-1) + hz(k))
             z(k) = z(k-1) + dz(k-1)
         end do
-    
+
+        ! dz for the last (bottom) layer 
+        dz(k_max) = 0.0_rk
     
         !Record the vertical grid in an ascii output file
         open(10,FILE = 'Vertical_grid.dat')
