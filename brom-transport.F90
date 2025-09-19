@@ -35,7 +35,8 @@
     
         !FABM model with all data and procedures related to biogeochemistry
         class (type_fabm_omp_model), pointer :: model
-    
+
+
         type (type_horizontal_standard_variable), parameter :: id_hice = type_horizontal_standard_variable(name='hice',units='m') ! horizontal - 2D
         type (type_horizontal_standard_variable), parameter :: id_aice = type_horizontal_standard_variable(name='aice',units='-')
         type (type_interior_standard_variable) :: & ! check if used!!
@@ -46,7 +47,7 @@
         integer   :: k_points_below_water, k_max, k_storm !z-axis related
         integer   :: par_max                     !no. BROM variables
         integer   :: diff_method, bioturb_across_SWI  !vertical diffusivity related
-        integer   :: h_relax, not_relax_centr  !horizontal transport  (relaxation) switches
+        integer   :: h_relax             !horizontal transport  (relaxation) switches
         integer   :: use_swradWm2, use_hice ! use input for light, ice, calculate Kz
         integer   :: input_type, port_initial_state !I/O related
         integer   :: bio_model ! basic ecosystem model: 0- for BROM_bio (default) 1- for OxyDep
@@ -57,10 +58,12 @@
         real(rk)  :: dt
         integer   :: start_year, first_day, last_day, repeat_forcing_year  !time related ! 
         integer   :: year_index, calendar_year, days_in_yr
+        integer, allocatable :: years(:), year_start_idx(:), year_last_idx(:)
+        integer, allocatable :: days_in_year(:), nrecs_in_year(:)
         integer   :: freq_turb, freq_sed  !time related ! ?? freq_sed, freq_turb
         integer   :: i_day, sim_day, output_step ! 
     
-        character(len=64) :: icfile_name, outfile_name, ncoutfile_name
+        character(len=64) :: forcing_filename, icfile_name, outfile_name, output_filename
         character :: hmix_file
     
         !Forcings to be provided to FABM: These must have the TARGET attribute
@@ -145,6 +148,8 @@
             start_year = get_brom_par("start_year")
             first_day = get_brom_par("first_day")   ! First day of start_year to start the simulation (If 1st of January then first_day=1)   
             last_day = get_brom_par("last_day")
+
+            forcing_filename = get_brom_name("forcing_filename")
             repeat_forcing_year = get_brom_par("repeat_forcing_year")
 
             freq_turb = get_brom_par("freq_turb")
@@ -168,10 +173,9 @@
             port_initial_state = get_brom_par("port_initial_state")
             icfile_name = get_brom_name("icfile_name")
             outfile_name = get_brom_name("outfile_name")
-            ncoutfile_name = get_brom_name("ncoutfile_name")
+            output_filename = get_brom_name("output_filename")
             K_O2s = get_brom_par("K_O2s")
             h_relax =  get_brom_par("h_relax")
-            not_relax_centr =  get_brom_par("not_relax_centr")
             bc_units_convert = get_brom_par("bc_units_convert")
             ! light connected parameters (if not available in the forcing file)
             latitude = get_brom_par("latitude")
@@ -224,13 +228,14 @@
             end if
             if (input_type.eq.2) then 
                 !-----------------------------------------------------------------
-                ! Loading water column physics from netCDF forcing file
+                ! Scanning depth and time dimensions from netCDF forcing file
                 !   - opens forcing file and figures out years and days per year
                 !   - loads depth dimension (z_w)
                 !-----------------------------------------------------------------
-                call open_forcing_file(z_w)
-                write(*,*) "NetCDF forcing successfully opened (depth axis and metadata)"
-                !Note: This uses the netCDF file to set z_w = layer midpoints, dz_w = increments between layer midpoints, hz_w = layer thicknesses
+                call scan_forcing_dimensions(forcing_filename, years, year_start_idx, year_last_idx, days_in_year, nrecs_in_year, &
+                                             start_year, first_day, last_day, repeat_forcing_year, use_hice, use_swradWm2, z_w)
+                write(*,*) "NetCDF forcing file successfully opened (depth axis and time dimensions)"
+                !Note: This uses the netCDF file to set z_w = depth at layer midpoints and checks that needed forcing variables are present. 
             end if
 
             !Determine total number of vertical grid points (layers) now that k_wat_bbl is determined
@@ -238,7 +243,7 @@
             k_max = k_wat_bbl + k_points_below_water
 
             !Determine number of days in the first year
-            year_index = find_year_index(start_year)
+            year_index = findloc(years, start_year, dim=1)
             days_in_yr = days_in_year(year_index)
 
             !------------------------------------------------------------
@@ -342,25 +347,26 @@
             !------------------------------------------------------------
 
             !------------------------------------------------------------
-            ! Loading initial variables and building the forcing arrays for the full vertical grid
-            call load_variable_year('temperature', start_year, t_w)
-            call load_variable_year('salinity', start_year, s_w)
-            call load_variable_year('Kz', start_year, kz_w)
+            ! Loading initial variables and building the forcing arrays for the full vertical grid            
+            call load_variable_year(forcing_filename, "temperature", start_year, years, year_start_idx, year_last_idx, t_w)
+            call load_variable_year(forcing_filename, 'salinity', start_year, years, year_start_idx, year_last_idx, s_w)
+            call load_variable_year(forcing_filename, "Kz", start_year, years, year_start_idx, year_last_idx, kz_w)
             if (use_swradWm2 == 1) then
-                call load_variable_year_1d('swradWm2', start_year, swradWm2)
+                call load_variable_year_1d(forcing_filename, 'swradWm2', start_year, years, year_start_idx, year_last_idx, swradWm2)
             else
                 if (allocated(swradWm2)) deallocate(swradWm2)
                 allocate(swradWm2(days_in_yr))
                 call build_swrad_year(Io, latitude, days_in_yr, swradWm2)
             end if
             if (use_hice.eq.1) then
-                call load_variable_year_1d('hice', start_year, hice)
-                call load_variable_year_1d('aice', start_year, aice)
+                call load_variable_year_1d(forcing_filename, 'hice', start_year, years, year_start_idx, year_last_idx, hice)
+                call load_variable_year_1d(forcing_filename, 'aice', start_year, years, year_start_idx, year_last_idx, aice)
             else 
                 if (allocated(hice)) deallocate(hice)
                 allocate(hice(days_in_yr))
                 hice = 0.0_rk
             end if
+            write(*,'(A,I6,A)') "Forcing data for year ", start_year, " loaded successfully."
             if (k_points_below_water>0) then
                 ! Construct full-depth annual forcing arrays (T, S, Kz) for the model
                 ! Below the water column, repeats the bottom value (constant T, S).
@@ -369,7 +375,7 @@
                                         t_w, s_w, kz_w, t, s, kz)                               
             end if   
 
-            write(*,*) "Initialized depth-dependent physics (T, S and Kz in BBL and sediments)"
+            write(*,*) "Initialized depth-dependent environment data (T, S and Kz) in BBL and sediments."
 
             !------------------------------------------------------------
         
@@ -742,7 +748,7 @@
 
             open(8,FILE = 'burying_rate.dat')
             !Initialize output
-            call init_netcdf(trim(ncoutfile_name), k_max, z, z1, model, use_hice, start_year)
+            call init_netcdf(trim(output_filename), k_max, z, z1, model, use_hice, start_year)
     
         end subroutine init_brom_transport
     !=======================================================================================================================
@@ -853,7 +859,7 @@
         steps_per_day = int(86400._rk/dt)   !number of time-steps per day  
         day_of_year = first_day - 1
         model_year = 1
-        year_index   = find_year_index(start_year)
+        year_index   = findloc(years, start_year, dim=1)
         calendar_year = start_year
         sim_sec        = 0.0_rk
         next_output_sec = 0.0_rk !real(output_step, rk)
@@ -881,26 +887,32 @@
             !-------- Reload data for the new year if needed ------------------------------------------------------------------------
             if (model_year > 1 .and. day_of_year == 1 .and. repeat_forcing_year == 0) then
                 ! Loads forcing data every new year
-                call load_variable_year('temperature', calendar_year, t_w)
-                call load_variable_year('salinity', calendar_year, s_w)
-                call load_variable_year('Kz', calendar_year, kz_w)
+                call load_variable_year(forcing_filename, "temperature", calendar_year, years, year_start_idx, year_last_idx, t_w)
+                call load_variable_year(forcing_filename, 'salinity', calendar_year, years, year_start_idx, year_last_idx, s_w)
+                call load_variable_year(forcing_filename, "Kz", calendar_year, years, year_start_idx, year_last_idx, kz_w)
                 if (use_swradWm2 == 1) then
-                    call load_variable_year_1d('swradWm2', calendar_year, swradWm2)
+                    call load_variable_year_1d(forcing_filename, 'swradWm2', calendar_year, years, year_start_idx, year_last_idx, swradWm2)
                 else
                     if (allocated(swradWm2)) deallocate(swradWm2)
                     allocate(swradWm2(days_in_yr))
                     call build_swrad_year(Io, latitude, days_in_yr, swradWm2)
                 end if
                 if (use_hice.eq.1) then
-                    call load_variable_year_1d('hice', calendar_year, hice)
-                    call load_variable_year_1d('aice', calendar_year, aice)                    
+                    call load_variable_year_1d(forcing_filename, 'hice', calendar_year, years, year_start_idx, year_last_idx, hice)
+                    call load_variable_year_1d(forcing_filename, 'aice', calendar_year, years, year_start_idx, year_last_idx, aice)
+                else 
+                    if (allocated(hice)) deallocate(hice)
+                    allocate(hice(days_in_yr))
+                    hice = 0.0_rk
                 end if
+                write(*,'(A,I6,A)') "Forcing data for year ", calendar_year, " loaded successfully."
+
                 if (k_points_below_water>0) then
                     ! Construct full-depth annual forcing arrays (T, S, Kz) for the model
                     ! Below the water column, repeats the bottom value (constant T, S).
                     call build_year_forcing(k_max, k_wat_bbl, k_bbl_sed, &
                                             z, z1, z_bbl_sed, dbl_thickness, &
-                                            t_w, s_w, kz_w, t, s, kz)                               
+                                            t_w, s_w, kz_w, t, s, kz)                          
                 end if                
             end if
                 
