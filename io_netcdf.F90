@@ -111,11 +111,18 @@
         if (allocated(nc)) deallocate(nc)
         allocate(nc); nc = type_input(ncfile)
 
+        !------ Loading depth values-----------------------------
         if (.not. nc%var_exists(depth_name)) stop 'FATAL (io_netcdf): Missing depth dimension in netcdf file'
         nz = nc%get_1st_dim_length(depth_name); if (nz<=0) stop 'FATAL (io_netcdf): Depth dimension <=0'
         if (allocated(z_w)) deallocate(z_w)
         allocate(z_w(nz))
         z_w = nc%get_column(depth_name)
+        ! Ensure depth is positive down
+        if (any(z_w < 0.0_rk)) then
+          z_w = abs(z_w)
+          write(*,*) 'NOTE: Depth values were negative in forcing file; converted to positive.'
+        end if
+
 
         ! --- detect layout ---
         has_year        = nc%var_exists('year')
@@ -269,10 +276,9 @@
         if (size(full,1) == nz) then
           ! Layout (depth, time)          
           out(:,:) = full(:, year_start_idx(k):year_last_idx(k))
-      
         else if (size(full,2) == nz) then
           ! Layout (time, depth)
-          out(:,:) = transpose(full(year_start_idx(k):year_last_idx(k), :))      
+          out(:,:) = transpose(full(year_start_idx(k):year_last_idx(k), :))
         else
           stop 'FATAL (io_netcdf): variable "'//trim(varname)//'" has unexpected shape'
         end if
@@ -371,9 +377,10 @@
         !call check_err(nf90_put_att(ncid, var_S, "units", "1e-3"))
         call check_err(nf90_put_att(ncid, var_S, "long_name", "sea water salinity"))
 
-        call check_err(nf90_def_var(ncid, "Kz", nf90_double, (/dim_depth, dim_time/), var_Kz), "defining Kz")
+        call check_err(nf90_def_var(ncid, "Kz", nf90_double, (/dim_depth_interface, dim_time/), var_Kz), "defining Kz")
         call check_err(nf90_put_att(ncid, var_Kz, "units", "m2 s-1"))
-        call check_err(nf90_put_att(ncid, var_Kz, "long_name", "vertical eddy diffusivity"))
+        call check_err(nf90_put_att(ncid, var_Kz, "long_name", "vertical eddy diffusivity at interfaces"))
+
 
         call check_err(nf90_def_var(ncid, "swrad", nf90_double, (/dim_time/), var_swrad), "defining swrad")
         call check_err(nf90_put_att(ncid, var_swrad, "units", "W m-2"))
