@@ -137,7 +137,6 @@
             implicit none
             integer :: bc_units_convert
         
-        
             !Reading brom.yaml
             call init_common()
         
@@ -293,7 +292,8 @@
             allocate(z_s1(k_max+1))
             allocate(kz_molCFL(k_max-1,par_max))
 
-            call compute_thicknesses(z_w, dz_w, hz_w)    
+            call compute_thicknesses(z_w, dz_w, hz_w)
+
             if (k_points_below_water==0) then
                 ! Classical only water-column case (no BBL, no sediments).
                 k_max=k_wat_bbl
@@ -856,7 +856,7 @@
         year_index   = find_year_index(start_year)
         calendar_year = start_year
         sim_sec        = 0.0_rk
-        next_output_sec = real(output_step, rk)
+        next_output_sec = 0.0_rk !real(output_step, rk)
 
         do sim_day = first_day,last_day
             ! Advance to next day
@@ -1285,7 +1285,7 @@
                 sink_per_day = 86400.0_rk * sink
                 ! here we save DIC (pCO2 in uM) air-sea flux
                 air_sea_flux_CO2 = 86400.0_rk * surf_flux(9) !surf_flux(9)
-                time_output = (real(next_output_sec - output_step,rk)/86400.0_rk) + real(first_day,rk) -1
+                time_output = (real(next_output_sec,rk)/86400.0_rk) + real(first_day,rk) -1
                 
 
                 if (sediments_units_convert.eq.1) then
