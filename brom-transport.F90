@@ -502,31 +502,7 @@
                                                     first_day, k_max, par_max, par_name, cc, vv)
             endif
         
-            !Check biological parameters for non-zero values
-            if (bio_model.lt.1) then  !case BROM
-                do ip=1,par_max
-                    if (ip.eq.id_Phy.or.ip.eq.id_Het.or.ip.eq.id_Baae.or.ip.eq.id_Baan.or.ip.eq.id_Bhae.or.ip.eq.id_Bhan) then                    
-                        do k=1,k_max
-                            if(cc(k,ip).le.0.0_rk) cc(k,ip)= 1.0E-7 !-11
-                        enddo
-                    endif
-                enddo
-            endif
-        
-            if (bio_model.ge.1) then    !case OxyDep
-                do ip=1,par_max
-                    if (ip.eq.id_Phy.or.ip.eq.id_Het) then
-                        
-                        do k=1,k_max
-                            if(cc(k,ip).le.0.0_rk) cc(k,ip)= 1.0E-7 !-11
-                        enddo
-                    
-                    endif
-                enddo
-            endif
-        
-        
-
+   
         
             !Establish which variables will be treated as solid phase in the sediments, based on the biological velocity (sinking/floating) from FABM.
         
