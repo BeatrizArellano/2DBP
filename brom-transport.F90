@@ -48,7 +48,7 @@
         integer   :: par_max                     !no. BROM variables
         integer   :: diff_method, bioturb_across_SWI  !vertical diffusivity related
         integer   :: h_relax             !horizontal transport  (relaxation) switches
-        integer   :: use_swradWm2, use_hice ! use input for light, ice, calculate Kz
+        integer   :: use_hice ! use input for light, ice, calculate Kz
         integer   :: input_type, port_initial_state !I/O related
         integer   :: bio_model ! basic ecosystem model: 0- for BROM_bio (default) 1- for OxyDep
         real(rk)  :: water_layer_thickness
@@ -67,7 +67,7 @@
         character :: hmix_file
     
         !Forcings to be provided to FABM: These must have the TARGET attribute
-        real(rk), allocatable, target, dimension(:)   :: hice, aice, swradWm2
+        real(rk), allocatable, target, dimension(:)   :: swradWm2, wind_speed, co2_air_ppm, hice, aice
         real(rk), allocatable, target, dimension(:)   :: surf_flux, bott_flux, bott_source, Izt, pressure, cell_thickness
         real(rk), allocatable, target, dimension(:,:) :: t, s
         real(rk), allocatable, target, dimension(:,:) :: vv, dVV, cc, cc_out, dcc, dcc_R, wbio ! add the description cc - all params, dcc - volumes of solids
@@ -107,7 +107,7 @@
         integer                                   :: inj_changing !for changing with time injection
         real(rk)                                  :: inj_square   ! square of the layer with injection
         !Constant forcings that can be read as parameters from brom.yaml
-        real(rk) :: wind_speed, pco2_atm, mu0_musw, dphidz_SWI, area_col 
+        real(rk) :: mu0_musw, dphidz_SWI, area_col 
      
         ! Injection of something as a function or years
         real(rk)     :: inj_smth(400)          
@@ -168,7 +168,6 @@
             diff_method = get_brom_par("diff_method")
             bioturb_across_SWI = get_brom_par("bioturb_across_SWI")
             input_type = get_brom_par("input_type")
-            use_swradWm2 = get_brom_par("use_swradWm2")
             use_hice = get_brom_par("use_hice")
             port_initial_state = get_brom_par("port_initial_state")
             icfile_name = get_brom_name("icfile_name")
@@ -183,10 +182,6 @@
         
             ! vertical grid params    
             dbl_thickness = get_brom_par("dbl_thickness")
-
-            !Set constant forcings
-            wind_speed = get_brom_par("wind_speed")    ! 10m wind speed [m s-1]
-            pco2_atm   = get_brom_par("pco2_atm")      ! CO2 partical pressure [ppm]
         
             !Molecular diffusivity of solutes (single constant value, infinite dilution)
             kz_mol0 = get_brom_par("kz_mol0")
@@ -233,7 +228,7 @@
                 !   - loads depth dimension (z_w)
                 !-----------------------------------------------------------------
                 call scan_forcing_dimensions(forcing_filename, years, year_start_idx, year_last_idx, days_in_year, nrecs_in_year, &
-                                             start_year, first_day, last_day, repeat_forcing_year, use_hice, use_swradWm2, z_w)
+                                             start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w)
                 write(*,*) "NetCDF forcing file successfully opened (depth axis and time dimensions)"
                 !Note: This uses the netCDF file to set z_w = depth at layer midpoints and checks that needed forcing variables are present. 
             end if
@@ -350,14 +345,11 @@
             ! Loading initial variables and building the forcing arrays for the full vertical grid            
             call load_variable_year(forcing_filename, "temperature", start_year, years, year_start_idx, year_last_idx, t_w)
             call load_variable_year(forcing_filename, 'salinity', start_year, years, year_start_idx, year_last_idx, s_w)
-            call load_variable_year(forcing_filename, "Kz", start_year, years, year_start_idx, year_last_idx, kz_w)
-            if (use_swradWm2 == 1) then
-                call load_variable_year_1d(forcing_filename, 'swradWm2', start_year, years, year_start_idx, year_last_idx, swradWm2)
-            else
-                if (allocated(swradWm2)) deallocate(swradWm2)
-                allocate(swradWm2(days_in_yr))
-                call build_swrad_year(Io, latitude, days_in_yr, swradWm2)
-            end if
+            call load_variable_year(forcing_filename, "Kz", start_year, years, year_start_idx, year_last_idx, kz_w)            
+            call load_variable_year_1d(forcing_filename, 'swradWm2', start_year, years, year_start_idx, year_last_idx, swradWm2)
+            call load_variable_year_1d(forcing_filename, 'wind_speed', start_year, years, year_start_idx, year_last_idx, wind_speed)
+            call load_variable_year_1d(forcing_filename, 'co2_air_ppm', start_year, years, year_start_idx, year_last_idx, co2_air_ppm)
+    
             if (use_hice.eq.1) then
                 call load_variable_year_1d(forcing_filename, 'hice', start_year, years, year_start_idx, year_last_idx, hice)
                 call load_variable_year_1d(forcing_filename, 'aice', start_year, years, year_start_idx, year_last_idx, aice)
@@ -483,10 +475,10 @@
             call model%link_interior_data(fabm_standard_variables%pressure, pressure)                              !dbar
             call model%link_interior_data(fabm_standard_variables%depth, z)                                    
             call model%link_interior_data(fabm_standard_variables%cell_thickness, cell_thickness)
-            call model%link_horizontal_data(fabm_standard_variables%wind_speed, wind_speed)
-            call model%link_horizontal_data(fabm_standard_variables%mole_fraction_of_carbon_dioxide_in_air, pco2_atm)
             call model%link_horizontal_data(fabm_standard_variables%latitude, latitude)
             call model%link_horizontal_data(fabm_standard_variables%surface_downwelling_shortwave_flux, swradWm2(1))
+            call model%link_horizontal_data(fabm_standard_variables%wind_speed, wind_speed(1))
+            call model%link_horizontal_data(fabm_standard_variables%mole_fraction_of_carbon_dioxide_in_air, co2_air_ppm(1))
             call model%link_scalar(fabm_standard_variables%number_of_days_since_start_of_the_year, doy_frac)
             if (use_hice.eq.1) then
                 call model%link_horizontal_data(type_horizontal_standard_variable(name='hice'), hice(1))
@@ -890,13 +882,10 @@
                 call load_variable_year(forcing_filename, "temperature", calendar_year, years, year_start_idx, year_last_idx, t_w)
                 call load_variable_year(forcing_filename, 'salinity', calendar_year, years, year_start_idx, year_last_idx, s_w)
                 call load_variable_year(forcing_filename, "Kz", calendar_year, years, year_start_idx, year_last_idx, kz_w)
-                if (use_swradWm2 == 1) then
-                    call load_variable_year_1d(forcing_filename, 'swradWm2', calendar_year, years, year_start_idx, year_last_idx, swradWm2)
-                else
-                    if (allocated(swradWm2)) deallocate(swradWm2)
-                    allocate(swradWm2(days_in_yr))
-                    call build_swrad_year(Io, latitude, days_in_yr, swradWm2)
-                end if
+                call load_variable_year_1d(forcing_filename, 'swradWm2', calendar_year, years, year_start_idx, year_last_idx, swradWm2)
+                call load_variable_year_1d(forcing_filename, 'wind_speed', calendar_year, years, year_start_idx, year_last_idx, wind_speed)
+                call load_variable_year_1d(forcing_filename, 'co2_air_ppm', calendar_year, years, year_start_idx, year_last_idx, co2_air_ppm)
+                
                 if (use_hice.eq.1) then
                     call load_variable_year_1d(forcing_filename, 'hice', calendar_year, years, year_start_idx, year_last_idx, hice)
                     call load_variable_year_1d(forcing_filename, 'aice', calendar_year, years, year_start_idx, year_last_idx, aice)
@@ -920,6 +909,8 @@
             call model%link_interior_data(fabm_standard_variables%temperature, t(:,day_of_year))
             call model%link_interior_data(fabm_standard_variables%practical_salinity, s(:,day_of_year))
             call model%link_horizontal_data(fabm_standard_variables%surface_downwelling_shortwave_flux, swradWm2(day_of_year))
+            call model%link_horizontal_data(fabm_standard_variables%wind_speed, wind_speed(day_of_year))
+            call model%link_horizontal_data(fabm_standard_variables%mole_fraction_of_carbon_dioxide_in_air, co2_air_ppm(day_of_year))
             if (use_hice.eq.1) then
                 call model%link_horizontal_data(type_horizontal_standard_variable(name='hice'), hice(day_of_year))
                 call model%link_horizontal_data(type_horizontal_standard_variable(name='aice'), aice(day_of_year))
@@ -1306,7 +1297,8 @@
 
                 call save_netcdf(k_max, cc, t(:,day_of_year), s(:,day_of_year), kz(:,day_of_year), &
                                  model, swradWm2(day_of_year), use_hice, hice(day_of_year), &
-                                 fick_per_day, sink_per_day, air_sea_flux_CO2, time_output)
+                                 fick_per_day, sink_per_day, air_sea_flux_CO2, &
+                                 wind_speed(day_of_year), co2_air_ppm(day_of_year), time_output)
 
                 next_output_sec = next_output_sec + output_step
             end if

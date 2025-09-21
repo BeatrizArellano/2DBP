@@ -42,7 +42,7 @@
 
       ! Physics variable IDs
       integer, save :: var_T = -1, var_S = -1, var_Kz = -1
-      integer, save :: var_swrad = -1, var_hice = -1
+      integer, save :: var_swrad = -1, var_hice = -1, var_wind_speed = -1, var_co2_air_ppm = -1
       integer, save :: var_airsea_co2 = -1   ! time-only CO2 air-sea flux
 
       ! FABM state variables
@@ -65,7 +65,7 @@
         ! Scan metadata (depth, year/day_of_year coverage)
         !------------------------------------------------------------
         subroutine scan_forcing_dimensions(filename, years, year_start_idx, year_last_idx, days_in_year, nrecs_in_year, &
-                                           start_year, first_day, last_day, repeat_forcing_year, use_hice, use_swradWm2, z_w)
+                                           start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w)
 
           !------------------- args -------------------
           character(*), intent(in)  :: filename
@@ -74,7 +74,7 @@
           real(rk),     allocatable, intent(out) :: z_w(:)
 
           integer,      intent(in) :: start_year, first_day, last_day
-          integer,      intent(in) :: repeat_forcing_year, use_hice, use_swradWm2
+          integer,      intent(in) :: repeat_forcing_year, use_hice
           !------------------- locals -----------------
           class(type_input), allocatable :: nc
           real(rk), allocatable :: tmp(:), full_depth(:)
@@ -192,11 +192,11 @@
           if (.not. nc%var_exists('temperature')) stop 'FATAL (io_netcdf): Missing variable "temperature"'
           if (.not. nc%var_exists('salinity'))    stop 'FATAL (io_netcdf): Missing variable "salinity"'
           if (.not. nc%var_exists('Kz'))          stop 'FATAL (io_netcdf): Missing variable "Kz"'
+          if (.not. nc%var_exists('wind_speed')) stop 'FATAL (io_netcdf): Missing variable "wind_speed"'
+          if (.not. nc%var_exists('co2_air_ppm'))   stop 'FATAL (io_netcdf): Missing variable "xCO2_air" (ppm)'
+          if (.not. nc%var_exists('swradWm2')) stop 'FATAL (io_netcdf): Missing variable "swradWm2"'
           if (use_hice == 1) then
             if (.not. nc%var_exists('hice')) stop 'FATAL (io_netcdf): Missing variable "hice"'
-          end if
-          if (use_swradWm2 == 1) then
-            if (.not. nc%var_exists('swradWm2')) stop 'FATAL (io_netcdf): Missing variable "swradWm2"'
           end if
 
           deallocate(nc)
@@ -361,6 +361,17 @@
         call check_err(nf90_put_att(ncid, var_swrad, "units", "W m-2"))
         call check_err(nf90_put_att(ncid, var_swrad, "long_name", "surface downward shortwave radiation"))
 
+        ! Wind speed (10 m)
+        call check_err(nf90_def_var(ncid, "wind_speed", nf90_double, (/dim_time/), var_wind_speed), "defining wind_speed")
+        call check_err(nf90_put_att(ncid, var_wind_speed, "units", "m s-1"))
+        call check_err(nf90_put_att(ncid, var_wind_speed, "long_name", "10 m wind speed"))
+
+        ! Atmospheric CO2 mole fraction (ppm)
+        call check_err(nf90_def_var(ncid, "co2_air_ppm", nf90_double, (/dim_time/), var_co2_air_ppm), "defining co2_air_ppm")
+        call check_err(nf90_put_att(ncid, var_co2_air_ppm, "units", "ppm"))
+        call check_err(nf90_put_att(ncid, var_co2_air_ppm, "long_name", "atmospheric CO2 mole fraction"))
+
+
         if (use_hice /= 0) then
           call check_err(nf90_def_var(ncid, "hice", nf90_double, (/dim_time/), var_hice), "defining hice")
           call check_err(nf90_put_att(ncid, var_hice, "units", "m"))
@@ -434,18 +445,19 @@
       subroutine save_netcdf(k_max, cc, t, s, kz, &
                              model, swradWm2,use_hice, hice, &
                              fick_per_day, sink_per_day, air_sea_flux_co2, &
-                             time_output)
+                             wind_speed, co2_air_ppm,time_output)
   
         ! Arguments
         integer, intent(in)                  :: k_max, use_hice
-        real(rk), intent(in)                 :: time_output        ! time in days since start
-        real(rk), dimension(:,:), intent(in) :: cc              ! tracer concentrations (depth x tracer)        
-        real(rk), dimension(:,:), intent(in) :: fick_per_day    ! fluxes across interfaces (depth+1 x tracer)
-        real(rk), dimension(:,:), intent(in) :: sink_per_day    ! sinking fluxes across interfaces (depth+1 x tracer)
-        real(rk), dimension(:),   intent(in) :: t, s, kz        ! physical profiles
+        real(rk), intent(in)                 :: time_output         ! time in days since start
+        real(rk), dimension(:,:), intent(in) :: cc                  ! tracer concentrations (depth x tracer)        
+        real(rk), dimension(:,:), intent(in) :: fick_per_day        ! fluxes across interfaces (depth+1 x tracer)
+        real(rk), dimension(:,:), intent(in) :: sink_per_day        ! sinking fluxes across interfaces (depth+1 x tracer)
+        real(rk), dimension(:),   intent(in) :: t, s, kz            ! physical profiles
         class(type_fabm_model), pointer      :: model
-        real(rk), intent(in)                 :: swradWm2, hice  ! surface forcing scalars
-        real(rk), intent(in) :: air_sea_flux_co2                ! air-sea flux of CO2
+        real(rk), intent(in)                 :: swradWm2, hice      ! surface forcing scalars
+        real(rk), intent(in)                 :: wind_speed, co2_air_ppm
+        real(rk), intent(in)                 :: air_sea_flux_co2    ! air-sea flux of CO2
                             
         ! Locals
         integer :: ip
@@ -482,6 +494,12 @@
       
         tmp(1) = swradWm2
         call check_err(nf90_put_var(ncid, var_swrad, tmp, start=(/time_index/), count=(/1/)), "writing swrad")
+
+        tmp(1) = wind_speed
+        call check_err(nf90_put_var(ncid, var_wind_speed, tmp, start=(/time_index/), count=(/1/)), "writing wind_speed")
+
+        tmp(1) = co2_air_ppm
+        call check_err(nf90_put_var(ncid, var_co2_air_ppm, tmp, start=(/time_index/), count=(/1/)), "writing co2_air_ppm")
 
         !------------------------------------------------------------
         ! Write air-sea flux of CO2
