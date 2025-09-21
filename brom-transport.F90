@@ -881,7 +881,7 @@
                 end if                
             end if
                 
-            ! ------------- Update FABM with corresponding day t,s,kz values ---------------------------------------------------
+            ! ------------- Update FABM with corresponding day forcing values  (t, s, Kz, swradWm2, wind_speed,co2_air_ppm)-------
             call model%link_interior_data(fabm_standard_variables%temperature, t(:,day_of_year))
             call model%link_interior_data(fabm_standard_variables%practical_salinity, s(:,day_of_year))
             call model%link_horizontal_data(fabm_standard_variables%surface_downwelling_shortwave_flux, swradWm2(day_of_year))
