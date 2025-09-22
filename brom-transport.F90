@@ -52,7 +52,7 @@
         integer   :: input_type, port_initial_state !I/O related
         integer   :: bio_model ! basic ecosystem model: 0- for BROM_bio (default) 1- for OxyDep
         real(rk)  :: water_layer_thickness
-        real(rk)  :: K_O2s, gargett_a0, gargett_q, mult_Kz, Kz_storm
+        real(rk)  :: K_O2s, gargett_a0, gargett_q
     
         ! Time input and output
         real(rk)  :: dt
@@ -207,7 +207,6 @@
             w_binf = get_brom_par("w_binf")
         
             mult_Kz = get_brom_par("mult_Kz")
-            Kz_storm = get_brom_par("Kz_storm")
 
             k_min = 1
             !Initialize FABM model from fabm.yaml
@@ -697,13 +696,7 @@
                     end if
                 end do
 
-            !------------------------------------------------------------
-
-
-            !!_____Patch for STORM_______________________________!
-            !if(k_storm.gt.0) then
-            !    kz(1:(k_storm),:)=Kz_storm
-            !endif
+            !----------------------------------------------------------------------
 
 
             !convert bottom boundary values from 'mass/pore water ml' for dissolved and 'mass/mass' for solids into 'mass/total volume'
