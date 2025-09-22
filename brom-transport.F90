@@ -204,9 +204,7 @@
             wat_con_inf = get_brom_par("wat_con_inf")
         
             !Vertical advection in the sediments
-            w_binf = get_brom_par("w_binf")
-        
-            mult_Kz = get_brom_par("mult_Kz")
+            w_binf = get_brom_par("w_binf")        
 
             k_min = 1
             !Initialize FABM model from fabm.yaml
