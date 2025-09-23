@@ -65,10 +65,11 @@
         ! Scan metadata (depth, year/day_of_year coverage)
         !------------------------------------------------------------
         subroutine scan_forcing_dimensions(filename, years, year_start_idx, year_last_idx, days_in_year, nrecs_in_year, &
-                                           start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w)
+                                           start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w, calendar_name)
 
           !------------------- args -------------------
           character(*), intent(in)  :: filename
+          character(len=*), intent(out) :: calendar_name
           integer,      allocatable, intent(out) :: years(:), year_start_idx(:), year_last_idx(:)
           integer,      allocatable, intent(out) :: days_in_year(:), nrecs_in_year(:)
           real(rk),     allocatable, intent(out) :: z_w(:)
@@ -79,7 +80,7 @@
           class(type_input), allocatable :: nc
           real(rk), allocatable :: tmp(:), full_depth(:)
           integer,  allocatable :: year_in(:), doy_in(:)
-          integer :: nt, nz, i, k, kstart, kk, rem                                          
+          integer :: nt, nz, i, k, kstart, kk, rem                                   
   
           
           ! Open file
@@ -188,7 +189,45 @@
             end do
           end if
 
-          ! Variable presence (required & optional)
+          !------------------ Calendar name based on number of days in forcing data ------------------!          
+          if (verify_gregorian(years, days_in_year)) then
+            calendar_name = 'gregorian'
+            if (repeat_forcing_year == 1) then
+              if (days_in_year(kstart)==365) then
+                write(*,*) 'INFO: Forcing year of 365 days to repeat data. Using noleap calendar.'
+                calendar_name = 'noleap'
+              else if (days_in_year(kstart)==366) then
+                calendar_name = 'all_leap'
+                write(*,*) 'INFO: Forcing year of 366 days to repeat data. Using all_leap calendar.'
+              end if
+            end if
+
+          else if (all(days_in_year == 360)) then
+            calendar_name = '360_day'
+          else
+            if (all(days_in_year == 366)) then
+              ! All leap years
+              calendar_name = 'all_leap'
+              write(*,*) 'INFO: All forcing years have 366 days and do not match Gregorian leap-year rules. Using all_leap calendar.'
+            else if (all(days_in_year == 365)) then
+              ! No leap years
+              calendar_name = 'noleap'
+              write(*,*) 'INFO: All forcing years have 365 days and do not match Gregorian leap-year rules. Using noleap calendar.'
+            else 
+              ! Other unknown calendar with number of days
+              if (size(years)==1 .and. days_in_year(1)<365) then
+                ! A case in which only a few days are provided
+                write(*,*) 'INFO: Partial year forcing (', days_in_year(1), ' days). Assuming Gregorian calendar.'
+                calendar_name = 'gregorian'
+              else
+                calendar_name = 'none'
+                write(*,*) 'WARNING: Forcing years have unusual number of days:', &
+                    minval(days_in_year), '...', maxval(days_in_year)
+              end if
+            end if
+          end if         
+
+          !----------------- Verifying Variable presence (required & optional) ---------------------------------
           if (.not. nc%var_exists('temperature')) stop 'FATAL (io_netcdf): Missing variable "temperature"'
           if (.not. nc%var_exists('salinity'))    stop 'FATAL (io_netcdf): Missing variable "salinity"'
           if (.not. nc%var_exists('Kz'))          stop 'FATAL (io_netcdf): Missing variable "Kz"'
@@ -302,10 +341,10 @@
   !=======================================================================================================================
 
 
-      subroutine init_netcdf(filename, k_max, z, z1, model, use_hice, start_year)
+      subroutine init_netcdf(filename, k_max, z, z1, model, use_hice, start_year, calendar_name)
   
         !Input variables
-        character(*), intent(in) :: filename
+        character(*), intent(in) :: filename, calendar_name
         integer,      intent(in) :: k_max, use_hice, start_year
         real(rk),     intent(in) :: z(:), z1(:)
         class(type_fabm_model), pointer, intent(in) :: model
@@ -331,6 +370,8 @@
         call check_err(nf90_put_att(ncid, var_time, "standard_name", "time"))
         call check_err(nf90_put_att(ncid, var_time, "long_name", "time"))
         call check_err(nf90_put_att(ncid, var_time, "axis", "T"))
+        call check_err(nf90_put_att(ncid, var_time, "calendar", trim(calendar_name)))
+        write(*,*) 'INFO: NetCDF output will use calendar = ', trim(calendar_name)  
 
         call check_err(nf90_def_var(ncid, "depth", nf90_double, (/dim_depth/), var_z), "defining depth variable")
         call check_err(nf90_put_att(ncid, var_z, "units", "m"))
@@ -612,10 +653,30 @@
         idx = min(lo, n)
     end subroutine
 
-    pure logical function is_leap_gregorian(y) result(isleap)
-      integer, intent(in) :: y
-      isleap = (mod(y,4)==0 .and. (mod(y,100)/=0 .or. mod(y,400)==0))
-    end function
+    logical function is_gregorian_leap(year)
+      integer, intent(in) :: year
+      is_gregorian_leap = (mod(year,4) == 0 .and. (mod(year,100) /= 0 .or. mod(year,400) == 0))
+    end function is_gregorian_leap
+
+    logical function verify_gregorian(years, days_in_year)
+      integer, intent(in) :: years(:), days_in_year(:)
+      integer :: i
+      verify_gregorian = .true.
+      do i = 1, size(years)
+        if (is_gregorian_leap(years(i))) then
+          if (days_in_year(i) /= 366) then
+            verify_gregorian = .false.
+            exit
+          end if
+        else
+          if (days_in_year(i) /= 365) then
+            verify_gregorian = .false.
+            exit
+          end if
+        end if
+      end do
+    end function verify_gregorian
+  
 
   !=======================================================================================================================
   

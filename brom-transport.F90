@@ -62,7 +62,9 @@
         integer, allocatable :: days_in_year(:), nrecs_in_year(:)
         integer   :: freq_turb, freq_sed  !time related ! ?? freq_sed, freq_turb
         integer   :: i_day, sim_day, output_step ! 
-    
+
+
+        character(len=16) :: calendar_name
         character(len=64) :: forcing_filename, icfile_name, outfile_name, output_filename
         character :: hmix_file
     
@@ -225,7 +227,7 @@
                 !   - loads depth dimension (z_w)
                 !-----------------------------------------------------------------
                 call scan_forcing_dimensions(forcing_filename, years, year_start_idx, year_last_idx, days_in_year, nrecs_in_year, &
-                                             start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w)
+                                             start_year, first_day, last_day, repeat_forcing_year, use_hice, z_w, calendar_name)
                 write(*,*) "NetCDF forcing file successfully opened (depth axis and time dimensions)"
                 !Note: This uses the netCDF file to set z_w = depth at layer midpoints and checks that needed forcing variables are present. 
             end if
@@ -707,7 +709,7 @@
 
             open(8,FILE = 'burying_rate.dat')
             !Initialize output
-            call init_netcdf(trim(output_filename), k_max, z, z1, model, use_hice, start_year)
+            call init_netcdf(trim(output_filename), k_max, z, z1, model, use_hice, start_year, calendar_name)
     
         end subroutine init_brom_transport
     !=======================================================================================================================
@@ -727,6 +729,7 @@
         integer      :: day_of_year, model_year
         integer      :: substep, steps_per_day !time related
         real(rk)     :: time_output, sim_sec, next_output_sec
+        integer      :: time_in_seconds
 
         integer      :: surf_flux_with_diff              !1 to include surface fluxes in diffusion update, 0 to include in bgc update
         integer      :: bott_flux_with_diff              !1 to include bottom fluxes in diffusion update, 0 to include in bgc update
@@ -827,7 +830,7 @@
             ! Advance to next day
             day_of_year = day_of_year + 1
 
-            ! Handle year rollover
+            ! Handle year progression
             if (day_of_year > days_in_year(year_index)) then
                 year_index  = year_index + 1
                 if (year_index > size(years)) then
@@ -1255,8 +1258,12 @@
                 sink_per_day = 86400.0_rk * sink
                 ! here we save DIC (pCO2 in uM) air-sea flux
                 air_sea_flux_CO2 = 86400.0_rk * surf_flux(9) !surf_flux(9)
+
                 time_output = (real(next_output_sec,rk)/86400.0_rk) + real(first_day,rk) -1
-                
+                ! Convert model time (days) to seconds, round to nearest second to avoid floating-point artefacts
+                time_in_seconds = nint(time_output * 86400.0_rk)
+                ! Convert back to days
+                time_output = real(time_in_seconds, rk) / 86400.0_rk
 
                 if (sediments_units_convert.eq.1) then
                     write(*,*) "Conversion to mass/pore water not supported at the moment. "
